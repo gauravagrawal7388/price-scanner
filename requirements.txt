@@ -11,3 +11,4 @@ Flask
 schedule
 gunicorn
 logzero
+websocket-client
