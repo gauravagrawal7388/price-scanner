@@ -1,6 +1,7 @@
 gspread
 oauth2client
-SmartApi
+smartapi-python
+pycryptodome
 pyotp
 yfinance
 pandas
