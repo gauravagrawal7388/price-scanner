@@ -1,0 +1,11 @@
+gspread
+oauth2client
+SmartApi
+pyotp
+yfinance
+pandas
+requests
+python-dateutil
+Flask
+schedule
+gunicorn
