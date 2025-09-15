@@ -10,3 +10,4 @@ python-dateutil
 Flask
 schedule
 gunicorn
+logzero
