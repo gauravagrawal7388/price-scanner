@@ -72,7 +72,7 @@ SYMBOLS_TO_EXCLUDE = {
     "PVTBANIETF", "PVTBANKADD", "SBIETFIT", "SENSEXADD", "SETFNIFBK", "SHARIABEES", "TECH", "UTIBANKETF",
     "AXISGOLD", "AXISILVER", "BBNPPGOLD", "BSLGOLDETF", "EGOLD", "ESILVER", "GOLD1", "GOLDBEES", "GOLDCASE",
     "GOLDETF", "GOLDETFADD", "GOLDIETF", "GOLDSHARE", "GOLDTECH", "GROWWGOLD", "GROWWSLVR", "HDFCGOLD",
-    "HDFCSILVER", "IVZINNIFTY", "LICMFGOLD", "MOGOLD", "QGOLDHALF", "SBISILVER", "SETFGOLD", "SILVER",
+    "HDFCSILVER", "IVZINGOLD", "LICMFGOLD", "MOGOLD", "QGOLDHALF", "SBISILVER", "SETFGOLD", "SILVER",
     "SILVER1", "SILVERADD", "SILVERBEES", "SILVERCASE", "SILVERETF", "SILVERIETF", "SILVRETF", "TATSILV",
     "UNIONGOLD", "AXISBPSETF", "EBBETF0430", "EBBETF0431", "EBBETF0432", "EBBETF0433", "GILT5YBEES",
     "GSEC10ABSL", "GSEC10IETF", "GSEC10YEAR", "GSEC5IETF", "LICNETFGSC", "LTGILTBEES", "NIF10GETF",
@@ -107,12 +107,6 @@ SYMBOLS_TO_EXCLUDE = {
     "MIDCAPIETF", "SELECTIPO", "ABGSEC", "MIDQ50ADD", "AONETOTAL", "MOHEALTH", "HEALTHY", "SBIETFCON",
     "COMMOIETF", "GROWWMOM50", "LICNFNHGP", "TNIDETF", "MOGSEC", "HNGSNGBEES", "TOP10ADD", "MONQ50"
 }
-
-# --- START: NEW SCHEDULER GLOBAL VARIABLE ---
-# This variable will track the date of the last successful scan to prevent re-runs.
-last_run_date = None
-# --- END: NEW SCHEDULER GLOBAL VARIABLE ---
-
 
 # Determine the path for the service account JSON key file
 if os.path.exists("/etc/secrets/creds.json"):
@@ -358,11 +352,16 @@ def get_fno_symbols():
         response.raise_for_status()
         data = response.json()
         
+        # =================================================================
+        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
+        # Switched from parsing the 'symbol' field to directly using the clean 'name' field.
+        # This correctly identifies all symbols, including those with numbers or hyphens.
         fno_symbols = {
             item.get('name')
             for item in data
             if item.get('exch_seg') == 'NFO' and item.get('instrumenttype') == 'FUTSTK' and item.get('name')
         }
+        # =================================================================
         
         print(f"✅ F&O list processed successfully. Found {len(fno_symbols)} unique stock futures symbols.")
         
@@ -413,12 +412,16 @@ def get_quarterly_growth(symbol, exchange):
         stock_ticker = yf.Ticker(ticker_symbol)
         quarterly_financials = stock_ticker.quarterly_financials
         
+        # Check if we have at least two quarters of data
         if quarterly_financials.empty or len(quarterly_financials.columns) < 2:
+            # print(f"   -> [INFO] Not enough quarterly data for {ticker_symbol} to calculate growth.")
             return None, None
 
+        # Get the latest quarter (Q1) and the previous quarter (Q2)
         latest_q = quarterly_financials.columns[0]
         previous_q = quarterly_financials.columns[1]
 
+        # --- Revenue Growth Calculation ---
         revenue_q1 = quarterly_financials.loc['Total Revenue', latest_q] if 'Total Revenue' in quarterly_financials.index else None
         revenue_q2 = quarterly_financials.loc['Total Revenue', previous_q] if 'Total Revenue' in quarterly_financials.index else None
         
@@ -427,26 +430,28 @@ def get_quarterly_growth(symbol, exchange):
             if revenue_q2 > 0:
                 revenue_growth = ((revenue_q1 / revenue_q2) - 1) * 100
             elif revenue_q1 > 0:
-                revenue_growth = float('inf')
+                revenue_growth = float('inf') # Positive growth from zero or negative
         
+        # --- Profit Growth Calculation ---
         profit_q1 = quarterly_financials.loc['Net Income', latest_q] if 'Net Income' in quarterly_financials.index else None
         profit_q2 = quarterly_financials.loc['Net Income', previous_q] if 'Net Income' in quarterly_financials.index else None
 
         profit_growth = None
         if profit_q1 is not None and profit_q2 is not None and pd.notna(profit_q1) and pd.notna(profit_q2):
-            if profit_q2 > 0:
+            if profit_q2 > 0: # Previous quarter was profitable
                 profit_growth = ((profit_q1 / profit_q2) - 1) * 100
-            elif profit_q2 < 0:
-                if profit_q1 > 0:
+            elif profit_q2 < 0: # Previous quarter was a loss
+                if profit_q1 > 0: # Turned profitable
                     profit_growth = float('inf') 
-                else:
+                else: # Loss reduced or increased
                     profit_growth = ((abs(profit_q2) - abs(profit_q1)) / abs(profit_q2)) * 100
-            elif profit_q2 == 0:
+            elif profit_q2 == 0: # Previous quarter was break-even
                 if profit_q1 > 0:
                     profit_growth = float('inf')
                 elif profit_q1 < 0:
                     profit_growth = float('-inf')
 
+        # --- NEW: Detailed Console Output ---
         profit_growth_display = "N/A"
         if profit_growth is not None:
             if math.isinf(profit_growth):
@@ -467,6 +472,7 @@ def get_quarterly_growth(symbol, exchange):
         return profit_growth, revenue_growth
 
     except Exception as e:
+        # print(f"   [WARN] Could not fetch or calculate growth for {ticker_symbol}: {e}")
         return None, None
         
 # ==============================================================================
@@ -503,6 +509,7 @@ def calculate_pm_logic(daily_df):
     pm_high = df_pm["High"].max() if not df_pm.empty else None
     pp_high = df_pp["High"].max() if not df_pp.empty else None
     
+    # --- CHANGE IMPLEMENTED HERE: Using "High" price instead of "Close" for breakout check ---
     if pm_high and not df_current.empty and (df_current["High"] > pm_high).any():
         breakout_date = df_current[df_current["High"] > pm_high].index[0]
         return f"{last_day_prev_month.strftime('%B')} ({breakout_date.strftime('%d %B')})"
@@ -515,14 +522,16 @@ def calculate_inside_bar(daily_df, interval):
     """Calculates inside bar count from a pre-fetched daily DataFrame."""
     if daily_df.empty: return 0
 
+    # --- CHANGE IMPLEMENTED HERE: Set tolerance based on interval ---
     if interval == 'daily':
-        tolerance_multiplier = 1.01
+        tolerance_multiplier = 1.01  # 1% tolerance for Daily Inside Bars
     else:
-        tolerance_multiplier = 1.02
+        tolerance_multiplier = 1.02  # 2% tolerance for Weekly and Monthly
 
     resample_map = {'monthly': 'ME', 'weekly': 'W', 'daily': 'D'}
     resample_period = resample_map[interval]
 
+    # Define aggregation rules for resampling
     agg_rules = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
     df = daily_df.resample(resample_period).agg(agg_rules).dropna()
 
@@ -551,13 +560,16 @@ def calculate_monthly_hh_count(daily_df):
     agg_rules = {'High': 'max'}
     df_monthly = daily_df.resample('ME').agg(agg_rules).dropna()
 
+    # Remove current incomplete month if it exists
     if not df_monthly.empty and df_monthly.index[-1].month == datetime.now().month:
         df_monthly = df_monthly.iloc[:-1]
 
+    # Need at least 2 months to make a comparison
     if len(df_monthly) < 2:
         return 0
 
     count = 0
+    # Iterate backwards from the last completed month up to a max of 5 comparisons
     for i in range(1, min(6, len(df_monthly))):
         current_month_high = df_monthly.iloc[-i]['High']
         previous_month_high = df_monthly.iloc[-(i + 1)]['High']
@@ -565,9 +577,11 @@ def calculate_monthly_hh_count(daily_df):
         if current_month_high > previous_month_high:
             count += 1
         else:
+            # The chain of higher highs is broken, so stop counting
             break
     return count
 
+# --- NEW: Combined Intraday Scan Function ---
 def calculate_intraday_momentum_scan(intraday_data, is_fno):
     """
     Calculates the most recent significant up and down moves from pre-fetched intraday data.
@@ -580,11 +594,13 @@ def calculate_intraday_momentum_scan(intraday_data, is_fno):
 
     combined_df = pd.concat(intraday_data)
     
+    # --- UP SCAN LOGIC ---
     up_threshold = 1.5 if is_fno else 3.0
     combined_df['gain'] = ((combined_df['Close'] / combined_df['Low']) - 1) * 100
     significant_gains = combined_df[combined_df['gain'] >= up_threshold].copy()
     
     if not significant_gains.empty:
+        # Sort by timestamp (latest first) to find the most recent signal
         sorted_gains = significant_gains.sort_index(ascending=False)
         latest_candle = sorted_gains.iloc[0]
         latest_gain = latest_candle['gain']
@@ -592,11 +608,13 @@ def calculate_intraday_momentum_scan(intraday_data, is_fno):
         formatted_time = timestamp_of_latest_gain.strftime("%d %B, %I:%M %p")
         up_result = f"'+{latest_gain:.2f}% ({formatted_time})"
 
+    # --- DOWN SCAN LOGIC ---
     down_threshold = 1.5 if is_fno else 3.0
     combined_df['drop'] = (1 - (combined_df['Close'] / combined_df['High'])) * 100
     significant_drops = combined_df[combined_df['drop'] >= down_threshold].copy()
 
     if not significant_drops.empty:
+        # Sort by timestamp (latest first) to find the most recent signal
         sorted_drops = significant_drops.sort_index(ascending=False)
         latest_candle = sorted_drops.iloc[0]
         max_drop = latest_candle['drop']
@@ -615,13 +633,16 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
     """Main function to run the entire scanning process."""
     print("\n--- Starting ATH + Price Scan Logic ---")
 
+    # === Check if ATH update is allowed ===
     now = datetime.now()
     ath_allowed = (
         (now.weekday() == 4 and now.time() >= dt_time(16, 0)) or
         (now.weekday() > 4) or
         (now.weekday() == 0 and now.time() <= dt_time(8, 0))
     )
+    # print(f"[DEBUG] Is ATH update allowed? {ath_allowed}")
 
+    # === ATH Cache Update (Columns AJ and AK) ===
     if ath_allowed:
         print("📈 Running ATH Cache Update using Angel One API...")
         today_str = now.strftime("%d-%b-%Y")
@@ -640,12 +661,16 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
             for row in all_cache_data[2:] if len(row) > 34 and row[34].strip()
         }
         
+        # =================================================================
+        # --- CHANGE IMPLEMENTED HERE ---
+        # Added a progress tracker for the ATH update process.
         symbols_to_update_ath = [s for s in symbols_for_processing if cache_data_map.get(s['base_symbol'], (None, None))[1] != today_str]
         total_symbols_to_update = len(symbols_to_update_ath)
         
         for i, symbol_info in enumerate(symbols_to_update_ath):
             base_symbol = symbol_info['base_symbol']
             print(f"   [{i+1}/{total_symbols_to_update}] Processing ATH for {base_symbol}...")
+        # =================================================================
             
             token = symbol_info['token']
             exchange = symbol_info['exchange']
@@ -680,6 +705,8 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
     else:
         print(f"🕒 Skipping ATH Cache update (not in allowed time range).")
 
+
+    # === Price Scan - Fetching LTPs ===
     print("⚡ Fetching LTPs for price scan using Angel One API...")
     try:
         ath_data_raw = cache_sheet.get_all_values()
@@ -689,6 +716,7 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
         ath_data = []
 
     ath_map = {row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): float(row[35]) for row in ath_data if row[35]}
+
 
     ltp_map = {}
     tokens_to_fetch_ltp = [s['token'] for s in symbols_for_processing if s['token']]
@@ -713,8 +741,10 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
 
     print(f"✅ LTP data fetched for {len(ltp_map)} records.")
 
+    # === NEW EFFICIENT WORKFLOW =================================================
     print("🚚 Starting efficient detailed analysis...")
 
+    # --- STEP 1: Pre-filter symbols that have basic data ---
     pre_filtered_symbols = []
     for s_info in symbols_for_processing:
         ltp = ltp_map.get(s_info['token'])
@@ -723,6 +753,7 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
             s_info.update({'ltp': ltp, 'ath': ath})
             pre_filtered_symbols.append(s_info)
 
+    # --- STEP 2: Fetch 1 year of daily data ONCE for pre-filtered stocks ---
     print(f"   [1/4] Fetching 1 year of daily data for {len(pre_filtered_symbols)} stocks...")
     historical_data_map = {}
     end_date = datetime.now()
@@ -734,6 +765,7 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
         historical_data_map[token] = df_daily
     print(f"   ✅ Fetched daily data for {len(historical_data_map)} stocks.")
 
+    # --- STEP 3: Perform final filtering and all calculations from stored data ---
     print("   [2/4] Performing final filtering and all calculations...")
     scanned_symbols_info = []
     final_output_rows = []
@@ -754,8 +786,12 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
 
         drop_pct = round(((lowest_low / s_info['ath']) * 100) - 100, 2)
         
+        # =================================================================
+        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
+        # F&O stocks now bypass the -40% filter. The filter only applies to Cash (non-F&O) stocks.
         is_fno_check = s_info['base_symbol'] in fno_symbols_set
         if is_fno_check or drop_pct >= -40:
+        # =================================================================
             s_info['drop_pct'] = drop_pct
             scanned_symbols_info.append(s_info)
 
@@ -768,11 +804,16 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
             
         sma_data = calculate_sma(daily_df)
         pm_flag = calculate_pm_logic(daily_df)
+        # =================================================================
+        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
+        # Removed the function call for the previous month low breakdown.
+        # =================================================================
         mib_flag = calculate_inside_bar(daily_df, 'monthly')
         wib_flag = calculate_inside_bar(daily_df, 'weekly')
         dib_flag = calculate_inside_bar(daily_df, 'daily')
         monthly_hh_count = calculate_monthly_hh_count(daily_df)
         
+        # --- Fetch intraday data for equity momentum scan ---
         start_date_scan = datetime.now() - relativedelta(weeks=2)
         end_date_scan = datetime.now()
         timeframe_map_equity = {"ONE_HOUR": "60 min", "THIRTY_MINUTE": "30 min", "FIFTEEN_MINUTE": "15 min"}
@@ -786,54 +827,68 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
         is_fno = s_info['base_symbol'] in fno_symbols_set
         intraday_up_result, intraday_down_result = calculate_intraday_momentum_scan(intraday_data_list, is_fno)
 
+        # --- Fetch Fundamental Growth ---
         profit_growth, revenue_growth = get_quarterly_growth(s_info['base_symbol'], s_info['exchange'])
         time.sleep(0.2) 
 
         sanitized_profit_growth = profit_growth if profit_growth is not None and math.isfinite(profit_growth) else ""
         sanitized_revenue_growth = revenue_growth if revenue_growth is not None and math.isfinite(revenue_growth) else ""
 
+        # =================================================================
+        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
+        # Restored the original logic for Column J.
         sma_display, ltp_gt_sma_flag = "", ""
         if sma_data:
             sma_value, sma_period, is_above = sma_data
             sma_display = f"{sma_value}({sma_period})"
             if is_above:
                 ltp_gt_sma_flag = f">{sma_period}"
+        # =================================================================
 
+        # =================================================================
+        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
+        # Final row data structure updated to restore ltp_gt_sma_flag in Column J.
         row_data = [
-            "FNO" if is_fno else "Cash",
-            s_info['ltp'],
-            s_info['ath'],
-            s_info['drop_pct'],
-            mib_flag,
-            monthly_hh_count,
-            sma_display,
-            ltp_gt_sma_flag,
-            pm_flag,
-            wib_flag,
-            dib_flag,
-            intraday_up_result,
-            intraday_down_result,
-            sanitized_profit_growth,
-            sanitized_revenue_growth,
+            "FNO" if is_fno else "Cash", # C
+            s_info['ltp'],               # D
+            s_info['ath'],               # E
+            s_info['drop_pct'],          # F
+            mib_flag,                    # G
+            monthly_hh_count,            # H
+            sma_display,                 # I
+            ltp_gt_sma_flag,             # J (ORIGINAL LOGIC RESTORED)
+            pm_flag,                     # K
+            wib_flag,                    # L
+            dib_flag,                    # M
+            intraday_up_result,          # N
+            intraday_down_result,        # O
+            sanitized_profit_growth,     # P
+            sanitized_revenue_growth,    # Q
         ]
+        # =================================================================
         final_output_rows.append(row_data)
 
     print(f"✅ Final analysis complete. Found {len(scanned_symbols_info)} stocks passing all filters.")
 
+    # --- STEP 4: Write filtered symbols and results to Google Sheet ---
     print("   [3/4] Writing final results to the sheet...")
     if scanned_symbols_info:
         try:
+            # Clear the range up to column Q only
             cache_sheet.batch_clear(['B3:Q2500'])
             
+            # Write symbols to column B
             column_b_data = [[f"{s['exchange']}:{s['base_symbol']},"] for s in scanned_symbols_info]
             range_to_update_b = f"B3:B{len(column_b_data) + 2}"
             cache_sheet.update(values=column_b_data, range_name=range_to_update_b, value_input_option='USER_ENTERED')
             print(f"   ✅ Wrote {len(column_b_data)} filtered symbols to Column B.")
 
             if final_output_rows:
+                # Write details up to column Q
                 range_to_update_details = f"C3:Q{len(final_output_rows) + 2}"
                 cache_sheet.update(values=final_output_rows, range_name=range_to_update_details, value_input_option='USER_ENTERED')
                 
+                # Update formatting ranges
                 cache_sheet.format(f"D3:F{len(final_output_rows) + 2}", {'numberFormat': {'type': 'NUMBER', 'pattern': '0.00'}})
                 cache_sheet.format(f"P3:Q{len(final_output_rows) + 2}", {'numberFormat': {'type': 'PERCENT', 'pattern': '0.00"%"'}})
                 print(f"   ✅ All detailed scan results written to ATH Cache sheet.")
@@ -850,27 +905,17 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
     print("\n--- Technical scan process finished. ---")
 
 
-# --- START: MODIFIED WRAPPER AND SCHEDULER LOGIC ---
+# --- START: NEW WRAPPER AND SCHEDULER LOGIC ---
 
 def run_daily_scan():
-    """
-    This function contains the entire 4-hour analysis logic and ensures it only runs
-    once per day.
-    """
-    global last_run_date
-    
-    today = datetime.now(ZoneInfo('Asia/Kolkata')).date()
-    # If the scan for today has already run, skip it.
-    if last_run_date == today:
-        print(f"Scan for {today.strftime('%Y-%m-%d')} has already been completed today. Skipping.")
-        return
-
+    """This function contains the entire 4-hour analysis logic."""
     print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Starting the daily 4-hour scan...")
     
+    initialize_services()
+    
     try:
-        initialize_services()
-        
-        # --- Main workflow ---
+        # --- NEW WORKFLOW ---
+        # 1. First, get all symbols from the sheet and find their tokens
         print("[DEBUG] Pre-loading all symbols from Google Sheet...")
         all_sheet_data = stock_sheet.get_all_values()[2:]
         symbols_raw = [row[34] for row in all_sheet_data if len(row) > 34 and row[34]]
@@ -894,59 +939,52 @@ def run_daily_scan():
                 symbols_for_processing.append({'base_symbol': clean_s, 'token': token_bse, 'exchange': exch_bse})
 
         print(f"✅ Found tokens for {len(symbols_for_processing)} total symbols.")
-
-        fno_symbols_set = get_fno_symbols()
-        run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_row_map)
-        
-        print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Daily scan has finished.")
-        # Mark the scan as complete for today to prevent re-runs
-        last_run_date = today
-
     except Exception as e:
-        print(f"❌ An error occurred during the daily scan: {e}")
+        print(f"❌ Critical error during symbol pre-loading: {e}")
+        symbols_for_processing = []
+        symbol_to_row_map = {}
+
+    # 2. Get the list of F&O symbols
+    fno_symbols_set = get_fno_symbols()
+    
+    # 3. Run the main analysis scan
+    run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_row_map)
+        
+    print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Daily scan has finished.")
 
 
 def run_scheduler():
     """
     Sets up and runs the job schedule in a loop.
-    Includes a catch-up mechanism for missed scans.
+    This function will run in a separate thread.
     """
-    schedule_time_utc = "09:30"
-    schedule_time_ist = dt_time(15, 0) # 3:00 PM IST
+    # NOTE: Render servers run on UTC time. 3:00 PM IST is 09:30 UTC.
+    schedule.every().day.at("09:30").do(run_daily_scan)
+    print("Scheduler initialized. Waiting for the scheduled time (09:30 UTC / 15:00 IST).")
 
-    # Schedule the job for every day at the specified UTC time
-    schedule.every().day.at(schedule_time_utc).do(run_daily_scan)
-    print(f"Scheduler initialized. Main job scheduled for {schedule_time_utc} UTC ({schedule_time_ist.strftime('%H:%M')} IST).")
-
-    # --- Catch-up Logic ---
-    # This function runs in a thread to check if a scan was missed upon startup.
-    def initial_check():
-        time.sleep(15) # Wait 15 seconds for the app to fully start
-        
-        now_ist = datetime.now(ZoneInfo('Asia/Kolkata'))
-        print(f"Performing initial check at {now_ist.strftime('%H:%M:%S')} IST...")
-
-        # If it's after the scheduled time today, run the scan now.
-        if now_ist.time() > schedule_time_ist:
-            print("Current time is past the daily scheduled time. Triggering catch-up scan.")
-            run_daily_scan() # The function has its own check to prevent multiple runs
-        else:
-            print("It's before the scheduled time today. Waiting for the scheduler.")
-    
-    threading.Thread(target=initial_check, daemon=True).start()
-
-    # Main scheduler loop
     while True:
         schedule.run_pending()
-        # Sleep for a short interval to be responsive to the schedule
-        time.sleep(1)
+        # Sleep for a minute before checking the schedule again.
+        time.sleep(60)
 
 if __name__ == "__main__":
-    # Start the scheduler in a background thread
+    # --- CHANGE IMPLEMENTED: Run the scan once immediately on startup ---
+    print("\n" + "="*50)
+    print("--- Performing initial manual scan on startup ---")
+    print("="*50 + "\n")
+    try:
+        run_daily_scan()
+        print("\n" + "="*50)
+        print("--- Initial manual scan complete. ---")
+        print("--- The service will now wait for the scheduled 3 PM run. ---")
+        print("="*50 + "\n")
+    except Exception as e:
+        print(f"\n❌❌ An error occurred during the initial manual scan: {e}\n")
+    
+    # Start the scheduler in a background thread for subsequent daily runs
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
     # Run the Flask app in the main thread to keep the service alive
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-# --- END: MODIFIED WRAPPER AND SCHEDULER LOGIC ---
-
+# --- END: NEW WRAPPER AND SCHEDULER LOGIC ---
