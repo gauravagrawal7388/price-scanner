@@ -28,6 +28,11 @@ import schedule
 from zoneinfo import ZoneInfo
 # --- END: IMPORTS FOR 24/7 SCHEDULER ---
 
+print("="*60)
+print("--- [RENDER-DEBUG] Script execution started (Top Level) ---")
+print(f"--- Timestamp: {datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')} ---")
+print("="*60)
+
 
 # ==============================================================================
 # --- GLOBAL CONFIGURATION AND CREDENTIALS ---
@@ -111,10 +116,13 @@ SYMBOLS_TO_EXCLUDE = {
 # Determine the path for the service account JSON key file
 if os.path.exists("/etc/secrets/creds.json"):
     JSON_KEY_FILE_PATH = "/etc/secrets/creds.json"
+    print("[RENDER-DEBUG] Using production credential path: /etc/secrets/creds.json")
 else:
     # Fallback for local development. Assumes the key file is in the same directory.
     current_dir = os.path.dirname(os.path.abspath(__file__))
     JSON_KEY_FILE_PATH = os.path.join(current_dir, "the-money-method-ad6d7-6d23c192b74e.json")
+    print(f"[RENDER-DEBUG] Using local development credential path: {JSON_KEY_FILE_PATH}")
+
 
 # Define the necessary OAuth2 scopes for Google Sheets and Drive access
 SCOPE = [
@@ -125,6 +133,7 @@ SCOPE = [
 
 # --- START: FLASK WEB SERVICE SETUP ---
 app = Flask(__name__)
+print("[RENDER-DEBUG] Flask app object created.")
 
 @app.route('/ping')
 def ping():
@@ -960,31 +969,52 @@ def run_scheduler():
     """
     # NOTE: Render servers run on UTC time. 3:00 PM IST is 09:30 UTC.
     schedule.every().day.at("09:30").do(run_daily_scan)
-    print("Scheduler initialized. Waiting for the scheduled time (09:30 UTC / 15:00 IST).")
+    print(f"--- [RENDER-DEBUG] Scheduler initialized. Waiting for the scheduled time (09:30 UTC / 15:00 IST). Current UTC time: {datetime.utcnow().strftime('%H:%M:%S')} ---")
 
     while True:
         schedule.run_pending()
         # Sleep for a minute before checking the schedule again.
         time.sleep(60)
 
-if __name__ == "__main__":
-    # --- CHANGE IMPLEMENTED: Run the scan once immediately on startup ---
+# --- NEW RENDER-COMPATIBLE STARTUP LOGIC ---
+def start_background_tasks():
+    """
+    This function runs the initial scan and then starts the scheduler.
+    It's designed to be run in a background thread.
+    """
     print("\n" + "="*50)
-    print("--- Performing initial manual scan on startup ---")
+    print("--- [RENDER-DEBUG] Background task thread started ---")
+    print("--- [RENDER-DEBUG] Performing initial manual scan on startup... ---")
     print("="*50 + "\n")
     try:
         run_daily_scan()
         print("\n" + "="*50)
-        print("--- Initial manual scan complete. ---")
-        print("--- The service will now wait for the scheduled 3 PM run. ---")
+        print("--- [RENDER-DEBUG] Initial manual scan complete. ---")
+        print("--- [RENDER-DEBUG] The service will now start the scheduler for 3 PM runs. ---")
         print("="*50 + "\n")
     except Exception as e:
-        print(f"\n❌❌ An error occurred during the initial manual scan: {e}\n")
+        print(f"\n❌❌ [RENDER-DEBUG] An error occurred during the initial manual scan: {e}\n")
     
-    # Start the scheduler in a background thread for subsequent daily runs
-    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
-    
-    # Run the Flask app in the main thread to keep the service alive
+    # After the initial scan, start the scheduler for subsequent daily runs
+    run_scheduler()
+
+# This block ensures the background tasks are started only once, 
+# even in environments that might spawn multiple worker processes.
+# This is the correct way to start background jobs with Gunicorn.
+if 'BACKGROUND_TASKS_STARTED' not in os.environ:
+    print("[RENDER-DEBUG] First worker process detected. Starting background tasks.")
+    background_thread = threading.Thread(target=start_background_tasks, daemon=True)
+    background_thread.start()
+    os.environ['BACKGROUND_TASKS_STARTED'] = 'true'
+    print("[RENDER-DEBUG] Background thread has been successfully started.")
+else:
+    print("[RENDER-DEBUG] Background tasks were already started by another worker. Skipping.")
+
+# The `if __name__ == "__main__":` block is for local execution only.
+# Gunicorn does not run this part.
+if __name__ == "__main__":
+    print("[LOCAL-DEBUG] Running locally. Starting Flask app directly.")
+    # The background tasks are already started above, so we just run the app.
+    # Note: On Windows, you might see the startup logs twice due to how Flask's reloader works.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-# --- END: NEW WRAPPER AND SCHEDULER LOGIC ---
+
