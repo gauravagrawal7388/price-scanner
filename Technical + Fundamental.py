@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 import requests
 import pandas as pd
+import socket # <--- CHANGE: Added for global timeout
 
 # GSpread specific imports
 from oauth2client.service_account import ServiceAccountCredentials
@@ -144,23 +145,39 @@ def ping():
 
 # ==============================================================================
 # --- ANGEL ONE API AND UTILITY FUNCTIONS ---
-# (NO CHANGES MADE IN THIS SECTION)
 # ==============================================================================
 
 def initialize_services():
     """Connects to Google Sheets and Angel One SmartAPI."""
     global gsheet, cache_sheet, stock_sheet, smart_api_obj
     print("[DEBUG] Initializing services...")
+
+    # --- SET GLOBAL TIMEOUT FOR ALL NETWORK OPERATIONS ---
+    # This is critical for Render's environment to prevent hangs.
+    print("[RENDER-DEBUG] Setting global socket timeout to 30 seconds...")
+    socket.setdefaulttimeout(30)
+    print("[RENDER-DEBUG] Global socket timeout set.")
+
     # --- Connect to Google Sheets ---
     try:
+        print("[RENDER-DEBUG] 1. Preparing to create Google credentials object...")
         creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_KEY_FILE_PATH, SCOPE)
+        print("[RENDER-DEBUG] 2. Credentials object created. Preparing to authorize...")
         client = gspread.authorize(creds)
+        print("[RENDER-DEBUG] 3. Authorization successful. Preparing to open sheet...")
         gsheet = client.open_by_key(GOOGLE_SHEET_ID)
         stock_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
         cache_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
         print("✅ Successfully connected to Google Sheets.")
     except Exception as e:
         print(f"❌ Error connecting to Google Sheets: {e}")
+        # ---
+        # NEW: Log the full traceback for detailed error analysis
+        import traceback
+        print("--- Full Traceback ---")
+        traceback.print_exc()
+        print("----------------------")
+        # ---
         sys.exit()
 
     # --- Authenticate with Angel One ---
