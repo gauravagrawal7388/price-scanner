@@ -9,10 +9,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 import requests
 import pandas as pd
-import socket # <--- CHANGE: Added for global timeout
+import socket
 
-# GSpread specific imports
-from oauth2client.service_account import ServiceAccountCredentials
+# --- CHANGE: Upgraded Google Authentication Library ---
+# The old 'oauth2client' is deprecated. This is the modern, official library.
+from google.oauth2.service_account import Credentials
 import gspread
 
 # --- NEW: Angel One SmartAPI Imports ---
@@ -160,8 +161,9 @@ def initialize_services():
 
     # --- Connect to Google Sheets ---
     try:
-        print("[RENDER-DEBUG] 1. Preparing to create Google credentials object...")
-        creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_KEY_FILE_PATH, SCOPE)
+        print("[RENDER-DEBUG] 1. Preparing to create Google credentials object using the MODERN library...")
+        # --- CHANGE: Use the modern library for authentication ---
+        creds = Credentials.from_service_account_file(JSON_KEY_FILE_PATH, scopes=SCOPE)
         print("[RENDER-DEBUG] 2. Credentials object created. Preparing to authorize...")
         client = gspread.authorize(creds)
         print("[RENDER-DEBUG] 3. Authorization successful. Preparing to open sheet...")
