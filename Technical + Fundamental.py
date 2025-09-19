@@ -148,6 +148,27 @@ def ping():
 # --- ANGEL ONE API AND UTILITY FUNCTIONS ---
 # ==============================================================================
 
+# --- NEW FUNCTION: Get accurate time from the internet ---
+def get_network_time():
+    """
+    Fetches the current UTC time from worldtimeapi.org to ensure accuracy for TOTP.
+    Falls back to system time if the API call fails.
+    """
+    try:
+        print("[DEBUG] Fetching accurate time from worldtimeapi.org...", flush=True)
+        res = requests.get("http://worldtimeapi.org/api/timezone/Etc/UTC")
+        res.raise_for_status()
+        result = res.json()
+        utc_datetime_str = result.get("utc_datetime")
+        # The API returns datetime with timezone info, which we can parse directly
+        network_time = datetime.fromisoformat(utc_datetime_str)
+        print(f"✅ Successfully fetched network time: {network_time}", flush=True)
+        return network_time
+    except Exception as e:
+        print(f"⚠️ [WARN] Could not fetch network time: {e}. Falling back to system time.", flush=True)
+        # Fallback to system's UTC time
+        return datetime.utcnow()
+
 def initialize_services():
     """Connects to Google Sheets and Angel One SmartAPI."""
     global gsheet, cache_sheet, stock_sheet, smart_api_obj
@@ -169,7 +190,6 @@ def initialize_services():
         
         print("[RENDER-DEBUG] 3. Authorization successful. Preparing to open sheet...")
         
-        # --- MODIFICATION: Added granular logging to pinpoint failure ---
         print(f"[RENDER-DEBUG] 3a. Attempting to open sheet with ID: {GOOGLE_SHEET_ID}...", flush=True)
         gsheet = client.open_by_key(GOOGLE_SHEET_ID)
         print("[RENDER-DEBUG] 3b. Successfully opened sheet object by key.", flush=True)
@@ -177,7 +197,6 @@ def initialize_services():
         stock_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
         cache_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
         print("[RENDER-DEBUG] 3c. Successfully accessed worksheet.", flush=True)
-        # --- END MODIFICATION ---
 
         print("✅ Successfully connected to Google Sheets.")
     except Exception as e:
@@ -192,13 +211,23 @@ def initialize_services():
     try:
         print("🔐 Authenticating with Angel One SmartAPI...")
         smart_api_obj = SmartConnect(api_key=API_KEY)
-        totp = pyotp.TOTP(TOTP_SECRET).now()
+
+        # --- MODIFICATION: Use network time for TOTP ---
+        # Get the accurate current time
+        current_time = get_network_time()
+        
+        # Generate TOTP using the accurate time
+        totp_generator = pyotp.TOTP(TOTP_SECRET)
+        totp = totp_generator.at(current_time)
+        print(f"[DEBUG] Generated TOTP '{totp}' for time {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC", flush=True)
+        # --- END MODIFICATION ---
+
         data = smart_api_obj.generateSession(CLIENT_CODE, MPIN, totp)
         if not (data and data.get('status') and data.get('data', {}).get('jwtToken')):
             raise Exception(f"Authentication failed. Response: {data.get('message', 'No error message')}")
         print("✅ Angel One session generated successfully!")
     except Exception as e:
-        print(f"❌ Error during Angel One session generation: {e}")
+        print(f"❌ Error during Angel One session generation: {e}", flush=True)
         sys.exit()
 
     # --- Download Instrument Master List ---
