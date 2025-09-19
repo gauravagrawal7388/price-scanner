@@ -690,283 +690,292 @@ def calculate_intraday_momentum_scan(intraday_data, is_fno):
 
 # ==============================================================================
 # --- MAIN SCRIPT LOGIC ---
-# (NO CHANGES MADE IN THIS SECTION)
 # ==============================================================================
 
 def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_row_map):
     """Main function to run the entire scanning process."""
-    print("\n--- Starting ATH + Price Scan Logic ---")
-
-    # === Check if ATH update is allowed ===
-    now = datetime.now()
-    ath_allowed = (
-        (now.weekday() == 4 and now.time() >= dt_time(16, 0)) or
-        (now.weekday() > 4) or
-        (now.weekday() == 0 and now.time() <= dt_time(8, 0))
-    )
-    # print(f"[DEBUG] Is ATH update allowed? {ath_allowed}")
-
-    # === ATH Cache Update (Columns AJ and AK) ===
-    if ath_allowed:
-        print("📈 Running ATH Cache Update using Angel One API...")
-        today_str = now.strftime("%d-%b-%Y")
-        updates = 0
-        updates_to_sheet = []
-
-        try:
-            all_cache_data = cache_sheet.get_all_values()
-        except Exception as e:
-            print(f"❌ Error reading from ATH Cache sheet: {e}")
-            all_cache_data = []
-
-        cache_data_map = {
-            row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): 
-            (row[35] if len(row) > 35 else None, row[36] if len(row) > 36 else None) 
-            for row in all_cache_data[2:] if len(row) > 34 and row[34].strip()
-        }
-        
-        # =================================================================
-        # --- CHANGE IMPLEMENTED HERE ---
-        # Added a progress tracker for the ATH update process.
-        symbols_to_update_ath = [s for s in symbols_for_processing if cache_data_map.get(s['base_symbol'], (None, None))[1] != today_str]
-        total_symbols_to_update = len(symbols_to_update_ath)
-        
-        for i, symbol_info in enumerate(symbols_to_update_ath):
-            base_symbol = symbol_info['base_symbol']
-            print(f"   [{i+1}/{total_symbols_to_update}] Processing ATH for {base_symbol}...")
-        # =================================================================
-            
-            token = symbol_info['token']
-            exchange = symbol_info['exchange']
-            
-            gs_row_num = symbol_to_row_map.get(base_symbol)
-            if not gs_row_num:
-                continue 
-
-            new_ath = fetch_full_history_for_ath(token, exchange)
-
-            if new_ath is not None and math.isfinite(new_ath):
-                new_ath = round(new_ath, 2)
-                prev_ath_str, _ = cache_data_map.get(base_symbol, (None, None))
-                prev_ath = None
-                try:
-                    if prev_ath_str: prev_ath = float(prev_ath_str)
-                except (ValueError, TypeError): pass
-
-                if new_ath != prev_ath:
-                    updates_to_sheet.append({'range': f'AJ{gs_row_num}:AK{gs_row_num}', 'values': [[new_ath, today_str]]})
-                    updates += 1
-            time.sleep(API_REQUEST_DELAY)
-
-        if updates_to_sheet:
-            try:
-                cache_sheet.batch_update(updates_to_sheet, value_input_option='USER_ENTERED')
-                print(f"✅ ATH Cache update complete: {updates} record(s) updated.")
-            except Exception as e:
-                print(f"❌ Error performing batch update for ATH Cache: {e}")
-        else:
-            print("ℹ️ No ATH records needed updating.")
-    else:
-        print(f"🕒 Skipping ATH Cache update (not in allowed time range).")
-
-
-    # === Price Scan - Fetching LTPs ===
-    print("⚡ Fetching LTPs for price scan using Angel One API...")
     try:
-        ath_data_raw = cache_sheet.get_all_values()
-        ath_data = [row for row in ath_data_raw[2:] if len(row) > 35 and row[34].strip()]
-    except Exception as e:
-        print(f"❌ Error reading ATH data for LTP calculation: {e}")
-        ath_data = []
+        print("\n--- Starting ATH + Price Scan Logic ---", flush=True)
 
-    ath_map = {row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): float(row[35]) for row in ath_data if row[35]}
+        # === Check if ATH update is allowed ===
+        print("[ATH-SCAN] 1. Checking if ATH update is allowed...", flush=True)
+        now = datetime.now()
+        ath_allowed = (
+            (now.weekday() == 4 and now.time() >= dt_time(16, 0)) or
+            (now.weekday() > 4) or
+            (now.weekday() == 0 and now.time() <= dt_time(8, 0))
+        )
+        print(f"[ATH-SCAN] 1a. Is ATH update allowed? {ath_allowed}", flush=True)
 
 
-    ltp_map = {}
-    tokens_to_fetch_ltp = [s['token'] for s in symbols_for_processing if s['token']]
-    if tokens_to_fetch_ltp:
-        tokens_by_exchange = {}
-        for s_info in symbols_for_processing:
-            if s_info['token'] not in tokens_by_exchange.setdefault(s_info['exchange'], []):
-                tokens_by_exchange[s_info['exchange']].append(s_info['token'])
+        # === ATH Cache Update (Columns AJ and AK) ===
+        if ath_allowed:
+            print("📈 [ATH-SCAN] 2. Running ATH Cache Update using Angel One API...", flush=True)
+            today_str = now.strftime("%d-%b-%Y")
+            updates = 0
+            updates_to_sheet = []
 
-        for exchange, tokens in tokens_by_exchange.items():
-            for i in range(0, len(tokens), 50):
-                batch_tokens = tokens[i:i+50]
-                payload = {"mode": "LTP", "exchangeTokens": {exchange: batch_tokens}}
-                try:
-                    response = smart_api_obj.getMarketData(**payload)
-                    if response and response.get("status") and response.get("data"):
-                        for item in response["data"]["fetched"]:
-                            ltp_map[item['symbolToken']] = item.get('ltp')
-                    time.sleep(API_REQUEST_DELAY)
-                except Exception as e:
-                    print(f"❌ Error fetching LTP batch for {exchange}: {e}")
+            try:
+                print("   [ATH-SCAN] 2a. Getting all values from cache_sheet for ATH update...", flush=True)
+                all_cache_data = cache_sheet.get_all_values()
+                print(f"   [ATH-SCAN] 2b. Successfully got {len(all_cache_data)} rows for ATH update.", flush=True)
+            except BaseException as e:
+                print(f"❌ Error reading from ATH Cache sheet: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                all_cache_data = []
 
-    print(f"✅ LTP data fetched for {len(ltp_map)} records.")
-
-    # === NEW EFFICIENT WORKFLOW =================================================
-    print("🚚 Starting efficient detailed analysis...")
-
-    # --- STEP 1: Pre-filter symbols that have basic data ---
-    pre_filtered_symbols = []
-    for s_info in symbols_for_processing:
-        ltp = ltp_map.get(s_info['token'])
-        ath = ath_map.get(s_info['base_symbol'])
-        if ltp and ath:
-            s_info.update({'ltp': ltp, 'ath': ath})
-            pre_filtered_symbols.append(s_info)
-
-    # --- STEP 2: Fetch 1 year of daily data ONCE for pre-filtered stocks ---
-    print(f"   [1/4] Fetching 1 year of daily data for {len(pre_filtered_symbols)} stocks...")
-    historical_data_map = {}
-    end_date = datetime.now()
-    start_date = end_date - relativedelta(years=1)
-    for s_info in pre_filtered_symbols:
-        token = s_info['token']
-        exchange = s_info['exchange']
-        df_daily = fetch_history_angelone(token, exchange, "ONE_DAY", start_date, end_date)
-        historical_data_map[token] = df_daily
-    print(f"   ✅ Fetched daily data for {len(historical_data_map)} stocks.")
-
-    # --- STEP 3: Perform final filtering and all calculations from stored data ---
-    print("   [2/4] Performing final filtering and all calculations...")
-    scanned_symbols_info = []
-    final_output_rows = []
-    
-    print("       - Applying filter: F&O stocks are included automatically, Cash stocks filtered by -40% from ATH...")
-    for s_info in pre_filtered_symbols:
-        token = s_info['token']
-        daily_df = historical_data_map.get(token)
-
-        if daily_df is None or daily_df.empty:
-            continue
-        
-        three_months_ago = datetime.now() - relativedelta(months=3)
-        lowest_low = daily_df[daily_df.index >= three_months_ago]['Low'].min()
-        
-        if not math.isfinite(lowest_low):
-             continue
-
-        drop_pct = round(((lowest_low / s_info['ath']) * 100) - 100, 2)
-        
-        # =================================================================
-        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
-        # F&O stocks now bypass the -40% filter. The filter only applies to Cash (non-F&O) stocks.
-        is_fno_check = s_info['base_symbol'] in fno_symbols_set
-        if is_fno_check or drop_pct >= -40:
-        # =================================================================
-            s_info['drop_pct'] = drop_pct
-            scanned_symbols_info.append(s_info)
-
-    print(f"       - Found {len(scanned_symbols_info)} stocks passing the filter.")
-    print("       - Calculating all technical indicators for filtered stocks...")
-
-    for s_info in scanned_symbols_info:
-        token = s_info['token']
-        daily_df = historical_data_map.get(token)
+            cache_data_map = {
+                row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): 
+                (row[35] if len(row) > 35 else None, row[36] if len(row) > 36 else None) 
+                for row in all_cache_data[2:] if len(row) > 34 and row[34].strip()
+            }
             
-        sma_data = calculate_sma(daily_df)
-        pm_flag = calculate_pm_logic(daily_df)
-        # =================================================================
-        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
-        # Removed the function call for the previous month low breakdown.
-        # =================================================================
-        mib_flag = calculate_inside_bar(daily_df, 'monthly')
-        wib_flag = calculate_inside_bar(daily_df, 'weekly')
-        dib_flag = calculate_inside_bar(daily_df, 'daily')
-        monthly_hh_count = calculate_monthly_hh_count(daily_df)
-        
-        # --- Fetch intraday data for equity momentum scan ---
-        start_date_scan = datetime.now() - relativedelta(weeks=2)
-        end_date_scan = datetime.now()
-        timeframe_map_equity = {"ONE_HOUR": "60 min", "THIRTY_MINUTE": "30 min", "FIFTEEN_MINUTE": "15 min"}
-        intraday_data_list = []
-        for tf_code, tf_display in timeframe_map_equity.items():
-            df = fetch_history_angelone(token, s_info['exchange'], tf_code, start_date_scan, end_date_scan)
-            if not df.empty:
-                df['timeframe'] = tf_display
-                intraday_data_list.append(df)
-        
-        is_fno = s_info['base_symbol'] in fno_symbols_set
-        intraday_up_result, intraday_down_result = calculate_intraday_momentum_scan(intraday_data_list, is_fno)
-
-        # --- Fetch Fundamental Growth ---
-        profit_growth, revenue_growth = get_quarterly_growth(s_info['base_symbol'], s_info['exchange'])
-        time.sleep(0.2) 
-
-        sanitized_profit_growth = profit_growth if profit_growth is not None and math.isfinite(profit_growth) else ""
-        sanitized_revenue_growth = revenue_growth if revenue_growth is not None and math.isfinite(revenue_growth) else ""
-
-        # =================================================================
-        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
-        # Restored the original logic for Column J.
-        sma_display, ltp_gt_sma_flag = "", ""
-        if sma_data:
-            sma_value, sma_period, is_above = sma_data
-            sma_display = f"{sma_value}({sma_period})"
-            if is_above:
-                ltp_gt_sma_flag = f">{sma_period}"
-        # =================================================================
-
-        # =================================================================
-        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
-        # Final row data structure updated to restore ltp_gt_sma_flag in Column J.
-        row_data = [
-            "FNO" if is_fno else "Cash", # C
-            s_info['ltp'],               # D
-            s_info['ath'],               # E
-            s_info['drop_pct'],          # F
-            mib_flag,                    # G
-            monthly_hh_count,            # H
-            sma_display,                 # I
-            ltp_gt_sma_flag,             # J (ORIGINAL LOGIC RESTORED)
-            pm_flag,                     # K
-            wib_flag,                    # L
-            dib_flag,                    # M
-            intraday_up_result,          # N
-            intraday_down_result,        # O
-            sanitized_profit_growth,     # P
-            sanitized_revenue_growth,    # Q
-        ]
-        # =================================================================
-        final_output_rows.append(row_data)
-
-    print(f"✅ Final analysis complete. Found {len(scanned_symbols_info)} stocks passing all filters.")
-
-    # --- STEP 4: Write filtered symbols and results to Google Sheet ---
-    print("   [3/4] Writing final results to the sheet...")
-    if scanned_symbols_info:
-        try:
-            # Clear the range up to column Q only
-            cache_sheet.batch_clear(['B3:Q2500'])
+            symbols_to_update_ath = [s for s in symbols_for_processing if cache_data_map.get(s['base_symbol'], (None, None))[1] != today_str]
+            total_symbols_to_update = len(symbols_to_update_ath)
+            print(f"   [ATH-SCAN] 2c. Found {total_symbols_to_update} symbols requiring an ATH update.", flush=True)
             
-            # Write symbols to column B
-            column_b_data = [[f"{s['exchange']}:{s['base_symbol']},"] for s in scanned_symbols_info]
-            range_to_update_b = f"B3:B{len(column_b_data) + 2}"
-            cache_sheet.update(values=column_b_data, range_name=range_to_update_b, value_input_option='USER_ENTERED')
-            print(f"   ✅ Wrote {len(column_b_data)} filtered symbols to Column B.")
-
-            if final_output_rows:
-                # Write details up to column Q
-                range_to_update_details = f"C3:Q{len(final_output_rows) + 2}"
-                cache_sheet.update(values=final_output_rows, range_name=range_to_update_details, value_input_option='USER_ENTERED')
+            for i, symbol_info in enumerate(symbols_to_update_ath):
+                base_symbol = symbol_info['base_symbol']
+                print(f"      [ATH-SCAN] [{i+1}/{total_symbols_to_update}] Processing ATH for {base_symbol}...", flush=True)
                 
-                # Update formatting ranges
-                cache_sheet.format(f"D3:F{len(final_output_rows) + 2}", {'numberFormat': {'type': 'NUMBER', 'pattern': '0.00'}})
-                cache_sheet.format(f"P3:Q{len(final_output_rows) + 2}", {'numberFormat': {'type': 'PERCENT', 'pattern': '0.00"%"'}})
-                print(f"   ✅ All detailed scan results written to ATH Cache sheet.")
+                token = symbol_info['token']
+                exchange = symbol_info['exchange']
+                
+                gs_row_num = symbol_to_row_map.get(base_symbol)
+                if not gs_row_num:
+                    continue 
 
-        except Exception as e:
-            print(f"❌ Error writing data to ATH Cache sheet: {e}")
-    else:
-        print("ℹ️ No symbols passed the final filter. Clearing old results.")
+                new_ath = fetch_full_history_for_ath(token, exchange)
+
+                if new_ath is not None and math.isfinite(new_ath):
+                    new_ath = round(new_ath, 2)
+                    prev_ath_str, _ = cache_data_map.get(base_symbol, (None, None))
+                    prev_ath = None
+                    try:
+                        if prev_ath_str: prev_ath = float(prev_ath_str)
+                    except (ValueError, TypeError): pass
+
+                    if new_ath != prev_ath:
+                        updates_to_sheet.append({'range': f'AJ{gs_row_num}:AK{gs_row_num}', 'values': [[new_ath, today_str]]})
+                        updates += 1
+                time.sleep(API_REQUEST_DELAY)
+
+            if updates_to_sheet:
+                try:
+                    print(f"   [ATH-SCAN] 2d. Found {len(updates_to_sheet)} ATH updates to write. Performing batch update...", flush=True)
+                    cache_sheet.batch_update(updates_to_sheet, value_input_option='USER_ENTERED')
+                    print(f"✅ ATH Cache update complete: {updates} record(s) updated.", flush=True)
+                except BaseException as e:
+                    print(f"❌ Error performing batch update for ATH Cache: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print("ℹ️ No ATH records needed updating.", flush=True)
+        else:
+            print(f"🕒 Skipping ATH Cache update (not in allowed time range).", flush=True)
+
+
+        # === Price Scan - Fetching LTPs ===
+        print("\n⚡ [LTP-SCAN] 3. Fetching LTPs for price scan using Angel One API...", flush=True)
         try:
-            cache_sheet.batch_clear(['B3:Q2500'])
-        except Exception as e:
-            print(f"❌ Error clearing old results: {e}")
+            print("   [LTP-SCAN] 3a. Getting all values from cache_sheet for LTP calculation...", flush=True)
+            ath_data_raw = cache_sheet.get_all_values()
+            ath_data = [row for row in ath_data_raw[2:] if len(row) > 35 and row[34].strip()]
+            print(f"   [LTP-SCAN] 3b. Successfully got {len(ath_data)} rows with ATH data.", flush=True)
+        except BaseException as e:
+            print(f"❌ Error reading ATH data for LTP calculation: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            ath_data = []
 
-    print("\n--- Technical scan process finished. ---")
+        ath_map = {row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): float(row[35]) for row in ath_data if row[35]}
+
+
+        ltp_map = {}
+        tokens_to_fetch_ltp = [s['token'] for s in symbols_for_processing if s['token']]
+        if tokens_to_fetch_ltp:
+            tokens_by_exchange = {}
+            for s_info in symbols_for_processing:
+                if s_info['token'] not in tokens_by_exchange.setdefault(s_info['exchange'], []):
+                    tokens_by_exchange[s_info['exchange']].append(s_info['token'])
+
+            for exchange, tokens in tokens_by_exchange.items():
+                print(f"   [LTP-SCAN] 3c. Fetching LTPs for {len(tokens)} tokens on {exchange}...", flush=True)
+                for i in range(0, len(tokens), 50):
+                    batch_tokens = tokens[i:i+50]
+                    payload = {"mode": "LTP", "exchangeTokens": {exchange: batch_tokens}}
+                    try:
+                        print(f"      [LTP-SCAN] 3d. Fetching batch {i//50 + 1}...", flush=True)
+                        response = smart_api_obj.getMarketData(**payload)
+                        if response and response.get("status") and response.get("data"):
+                            for item in response["data"]["fetched"]:
+                                ltp_map[item['symbolToken']] = item.get('ltp')
+                        time.sleep(API_REQUEST_DELAY)
+                    except BaseException as e:
+                        print(f"❌ Error fetching LTP batch for {exchange}: {e}", flush=True)
+                        import traceback
+                        traceback.print_exc()
+
+        print(f"✅ LTP data fetched for {len(ltp_map)} records.", flush=True)
+
+        # === NEW EFFICIENT WORKFLOW =================================================
+        print("\n🚚 [ANALYSIS] 4. Starting efficient detailed analysis...", flush=True)
+
+        # --- STEP 1: Pre-filter symbols that have basic data ---
+        print("   [ANALYSIS] 4a. Pre-filtering symbols with LTP and ATH data...", flush=True)
+        pre_filtered_symbols = []
+        for s_info in symbols_for_processing:
+            ltp = ltp_map.get(s_info['token'])
+            ath = ath_map.get(s_info['base_symbol'])
+            if ltp and ath:
+                s_info.update({'ltp': ltp, 'ath': ath})
+                pre_filtered_symbols.append(s_info)
+        print(f"   [ANALYSIS] 4b. Found {len(pre_filtered_symbols)} pre-filtered symbols.", flush=True)
+
+        # --- STEP 2: Fetch 1 year of daily data ONCE for pre-filtered stocks ---
+        print(f"   [ANALYSIS] 4c. Fetching 1 year of daily data for {len(pre_filtered_symbols)} stocks...", flush=True)
+        historical_data_map = {}
+        end_date = datetime.now()
+        start_date = end_date - relativedelta(years=1)
+        for s_info in pre_filtered_symbols:
+            token = s_info['token']
+            exchange = s_info['exchange']
+            df_daily = fetch_history_angelone(token, exchange, "ONE_DAY", start_date, end_date)
+            historical_data_map[token] = df_daily
+        print(f"   [ANALYSIS] 4d. Fetched daily data for {len(historical_data_map)} stocks.", flush=True)
+
+        # --- STEP 3: Perform final filtering and all calculations from stored data ---
+        print("   [ANALYSIS] 4e. Performing final filtering and all calculations...", flush=True)
+        scanned_symbols_info = []
+        final_output_rows = []
+        
+        print("      [ANALYSIS] Applying filter: F&O stocks auto-included, Cash stocks filtered by -40% from ATH...", flush=True)
+        for s_info in pre_filtered_symbols:
+            token = s_info['token']
+            daily_df = historical_data_map.get(token)
+
+            if daily_df is None or daily_df.empty:
+                continue
+            
+            three_months_ago = datetime.now() - relativedelta(months=3)
+            lowest_low = daily_df[daily_df.index >= three_months_ago]['Low'].min()
+            
+            if not math.isfinite(lowest_low):
+                 continue
+
+            drop_pct = round(((lowest_low / s_info['ath']) * 100) - 100, 2)
+            
+            is_fno_check = s_info['base_symbol'] in fno_symbols_set
+            if is_fno_check or drop_pct >= -40:
+                s_info['drop_pct'] = drop_pct
+                scanned_symbols_info.append(s_info)
+
+        print(f"      [ANALYSIS] Found {len(scanned_symbols_info)} stocks passing the filter.", flush=True)
+        print("      [ANALYSIS] Calculating all technical indicators for filtered stocks...", flush=True)
+
+        for s_info in scanned_symbols_info:
+            token = s_info['token']
+            daily_df = historical_data_map.get(token)
+                
+            sma_data = calculate_sma(daily_df)
+            pm_flag = calculate_pm_logic(daily_df)
+            mib_flag = calculate_inside_bar(daily_df, 'monthly')
+            wib_flag = calculate_inside_bar(daily_df, 'weekly')
+            dib_flag = calculate_inside_bar(daily_df, 'daily')
+            monthly_hh_count = calculate_monthly_hh_count(daily_df)
+            
+            start_date_scan = datetime.now() - relativedelta(weeks=2)
+            end_date_scan = datetime.now()
+            timeframe_map_equity = {"ONE_HOUR": "60 min", "THIRTY_MINUTE": "30 min", "FIFTEEN_MINUTE": "15 min"}
+            intraday_data_list = []
+            for tf_code, tf_display in timeframe_map_equity.items():
+                df = fetch_history_angelone(token, s_info['exchange'], tf_code, start_date_scan, end_date_scan)
+                if not df.empty:
+                    df['timeframe'] = tf_display
+                    intraday_data_list.append(df)
+            
+            is_fno = s_info['base_symbol'] in fno_symbols_set
+            intraday_up_result, intraday_down_result = calculate_intraday_momentum_scan(intraday_data_list, is_fno)
+
+            profit_growth, revenue_growth = get_quarterly_growth(s_info['base_symbol'], s_info['exchange'])
+            time.sleep(0.2) 
+
+            sanitized_profit_growth = profit_growth if profit_growth is not None and math.isfinite(profit_growth) else ""
+            sanitized_revenue_growth = revenue_growth if revenue_growth is not None and math.isfinite(revenue_growth) else ""
+
+            sma_display, ltp_gt_sma_flag = "", ""
+            if sma_data:
+                sma_value, sma_period, is_above = sma_data
+                sma_display = f"{sma_value}({sma_period})"
+                if is_above:
+                    ltp_gt_sma_flag = f">{sma_period}"
+            
+            row_data = [
+                "FNO" if is_fno else "Cash", # C
+                s_info['ltp'],               # D
+                s_info['ath'],               # E
+                s_info['drop_pct'],          # F
+                mib_flag,                    # G
+                monthly_hh_count,            # H
+                sma_display,                 # I
+                ltp_gt_sma_flag,             # J
+                pm_flag,                     # K
+                wib_flag,                    # L
+                dib_flag,                    # M
+                intraday_up_result,          # N
+                intraday_down_result,        # O
+                sanitized_profit_growth,     # P
+                sanitized_revenue_growth,    # Q
+            ]
+            final_output_rows.append(row_data)
+
+        print(f"✅ [ANALYSIS] Final analysis complete. Found {len(scanned_symbols_info)} stocks passing all filters.", flush=True)
+
+        # --- STEP 4: Write filtered symbols and results to Google Sheet ---
+        print("   [ANALYSIS] 4f. Writing final results to the sheet...", flush=True)
+        if scanned_symbols_info:
+            try:
+                print("      [ANALYSIS] Clearing old data from B3:Q2500...", flush=True)
+                cache_sheet.batch_clear(['B3:Q2500'])
+                
+                print("      [ANALYSIS] Writing symbols to column B...", flush=True)
+                column_b_data = [[f"{s['exchange']}:{s['base_symbol']},"] for s in scanned_symbols_info]
+                range_to_update_b = f"B3:B{len(column_b_data) + 2}"
+                cache_sheet.update(values=column_b_data, range_name=range_to_update_b, value_input_option='USER_ENTERED')
+                print(f"      [ANALYSIS] Wrote {len(column_b_data)} filtered symbols to Column B.", flush=True)
+
+                if final_output_rows:
+                    print("      [ANALYSIS] Writing detailed results to columns C:Q...", flush=True)
+                    range_to_update_details = f"C3:Q{len(final_output_rows) + 2}"
+                    cache_sheet.update(values=final_output_rows, range_name=range_to_update_details, value_input_option='USER_ENTERED')
+                    
+                    print("      [ANALYSIS] Applying number formatting...", flush=True)
+                    cache_sheet.format(f"D3:F{len(final_output_rows) + 2}", {'numberFormat': {'type': 'NUMBER', 'pattern': '0.00'}})
+                    cache_sheet.format(f"P3:Q{len(final_output_rows) + 2}", {'numberFormat': {'type': 'PERCENT', 'pattern': '0.00"%"'}})
+                    print(f"   ✅ All detailed scan results written to ATH Cache sheet.", flush=True)
+
+            except BaseException as e:
+                print(f"❌ Error writing data to ATH Cache sheet: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+        else:
+            print("ℹ️ No symbols passed the final filter. Clearing old results.", flush=True)
+            try:
+                cache_sheet.batch_clear(['B3:Q2500'])
+            except BaseException as e:
+                print(f"❌ Error clearing old results: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+
+        print("\n--- Technical scan process finished. ---", flush=True)
+    
+    except BaseException as e:
+        print(f"❌ A FATAL, UNCAUGHT exception occurred in run_ath_and_price_scan: {e}", flush=True)
+        import traceback
+        print("--- Full Traceback for ATH/Price Scan Error ---", flush=True)
+        traceback.print_exc()
+        print("---------------------------------------------", flush=True)
 
 
 # --- START: NEW WRAPPER AND SCHEDULER LOGIC ---
