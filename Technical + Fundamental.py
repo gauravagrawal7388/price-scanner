@@ -190,15 +190,42 @@ def initialize_services():
 
     # --- Authenticate with Angel One ---
     try:
+        # --- NEW DEBUGGING STEP 1 ---
         print("🔐 Authenticating with Angel One SmartAPI...")
+        print("   [ANGEL-DEBUG] Step 1: Creating SmartConnect object...")
         smart_api_obj = SmartConnect(api_key=API_KEY)
+        print("   [ANGEL-DEBUG] Step 1: SmartConnect object created successfully.")
+
+        # --- NEW DEBUGGING STEP 2 ---
+        print("   [ANGEL-DEBUG] Step 2: Generating TOTP...")
         totp = pyotp.TOTP(TOTP_SECRET).now()
+        print(f"   [ANGEL-DEBUG] Step 2: TOTP generated: {totp}")
+
+        # --- NEW DEBUGGING STEP 3 ---
+        print(f"   [ANGEL-DEBUG] Step 3: Calling generateSession for client code {CLIENT_CODE}...")
         data = smart_api_obj.generateSession(CLIENT_CODE, MPIN, totp)
-        if not (data and data.get('status') and data.get('data', {}).get('jwtToken')):
-            raise Exception(f"Authentication failed. Response: {data.get('message', 'No error message')}")
-        print("✅ Angel One session generated successfully!")
+        print(f"   [ANGEL-DEBUG] Step 3: Raw response from generateSession: {data}")
+
+        # --- NEW DEBUGGING STEP 4 ---
+        print("   [ANGEL-DEBUG] Step 4: Validating the session response...")
+        if data and data.get('status') and data.get('data', {}).get('jwtToken'):
+            print("   [ANGEL-DEBUG] Step 4: Validation successful. JWT Token found.")
+            print("✅ Angel One session generated successfully!")
+        else:
+            # This 'else' block will now explicitly show the failure reason
+            print("   [ANGEL-DEBUG] Step 4: Validation FAILED. Response was invalid or did not contain a JWT Token.")
+            error_message = data.get('message', 'No specific error message returned from API.')
+            print(f"   [ANGEL-DEBUG] API Error Message: {error_message}")
+            # Raising an exception to stop the script, as before.
+            raise Exception(f"Authentication failed. Full Response: {data}")
+
     except Exception as e:
-        print(f"❌ Error during Angel One session generation: {e}")
+        print(f"❌ An exception occurred during Angel One session generation: {e}")
+        # --- NEW: ADDING FULL TRACEBACK FOR DEEPER DEBUGGING ---
+        import traceback
+        print("--- Full Traceback ---")
+        traceback.print_exc()
+        print("----------------------")
         sys.exit()
 
     # --- Download Instrument Master List ---
@@ -1046,4 +1073,3 @@ if __name__ == "__main__":
     # The background tasks are already started above, so we just run the app.
     # Note: On Windows, you might see the startup logs twice due to how Flask's reloader works.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
