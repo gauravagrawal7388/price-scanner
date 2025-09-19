@@ -400,38 +400,43 @@ def get_fno_symbols():
     Downloads the official list of F&O securities from the Angel Broking JSON file
     and returns a set of symbols for quick lookup.
     """
-    print("📦 Downloading F&O securities list from Angel Broking...")
+    print("📦 Downloading F&O securities list from Angel Broking...", flush=True)
     fno_url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     try:
+        # --- NEW DEBUGGING STEP ---
+        print(f"   [FNO-DEBUG] About to make GET request to: {fno_url}", flush=True)
         response = requests.get(fno_url, headers=headers, timeout=20)
+        print(f"   [FNO-DEBUG] GET request completed. Status Code: {response.status_code}", flush=True)
         response.raise_for_status()
+        print("   [FNO-DEBUG] Response status is OK. About to parse JSON...", flush=True)
         data = response.json()
+        print("   [FNO-DEBUG] JSON parsed successfully.", flush=True)
         
-        # =================================================================
-        # --- CHANGE IMPLEMENTED AS PER YOUR REQUEST ---
-        # Switched from parsing the 'symbol' field to directly using the clean 'name' field.
-        # This correctly identifies all symbols, including those with numbers or hyphens.
         fno_symbols = {
             item.get('name')
             for item in data
             if item.get('exch_seg') == 'NFO' and item.get('instrumenttype') == 'FUTSTK' and item.get('name')
         }
-        # =================================================================
         
-        print(f"✅ F&O list processed successfully. Found {len(fno_symbols)} unique stock futures symbols.")
+        print(f"✅ F&O list processed successfully. Found {len(fno_symbols)} unique stock futures symbols.", flush=True)
         
         if fno_symbols:
             sorted_symbols = sorted(list(fno_symbols))
-            print("\n--- F&O Symbol List ---")
+            print("\n--- F&O Symbol List ---", flush=True)
             for i in range(0, len(sorted_symbols), 10):
                 chunk = sorted_symbols[i:i+10]
-                print(", ".join(chunk))
-            print("-----------------------\n")
+                print(", ".join(chunk), flush=True)
+            print("-----------------------\n", flush=True)
             
         return fno_symbols
-    except Exception as e:
-        print(f"❌ Error processing the F&O list: {e}")
+    except BaseException as e: # Changed from Exception to BaseException
+        print(f"❌ Critical error in get_fno_symbols: {e}", flush=True)
+        # --- NEW DEBUGGING STEP ---
+        import traceback
+        print("--- Full Traceback for F&O Error ---", flush=True)
+        traceback.print_exc()
+        print("------------------------------------", flush=True)
         return set()
 
 # ==============================================================================
