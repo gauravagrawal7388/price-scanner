@@ -494,8 +494,11 @@ def get_quarterly_growth(symbol, exchange):
             elif math.isfinite(revenue_growth):
                 revenue_growth_display = f"{revenue_growth:+.2f}%"
 
-        print(f"   {symbol} -> Profit : {profit_growth_display} (Q1: {format_large_number(profit_q1)}, Q2: {format_large_number(profit_q2)})")
-        print(f"   {symbol} -> Revenue: {revenue_growth_display} (Q1: {format_large_number(revenue_q1)}, Q2: {format_large_number(revenue_q2)})")
+        # --- MODIFICATION ---
+        # Added flush=True to ensure output appears immediately in server logs.
+        print(f"   {symbol} -> Profit : {profit_growth_display} (Q1: {format_large_number(profit_q1)}, Q2: {format_large_number(profit_q2)})", flush=True)
+        print(f"   {symbol} -> Revenue: {revenue_growth_display} (Q1: {format_large_number(revenue_q1)}, Q2: {format_large_number(revenue_q2)})", flush=True)
+        # --- END MODIFICATION ---
 
         return profit_growth, revenue_growth
 
@@ -1020,7 +1023,7 @@ def start_background_tasks():
 # This block ensures the background tasks are started only once, 
 # even in environments that might spawn multiple worker processes.
 # This is the correct way to start background jobs with Gunicorn.
-if 'BACKGROUND_TASKS_STARTED' not in os.environ:
+if 'BACKGROUND_TASS_STARTED' not in os.environ:
     print("[RENDER-DEBUG] First worker process detected. Starting background tasks.")
     background_thread = threading.Thread(target=start_background_tasks, daemon=True)
     background_thread.start()
@@ -1036,4 +1039,3 @@ if __name__ == "__main__":
     # The background tasks are already started above, so we just run the app.
     # Note: On Windows, you might see the startup logs twice due to how Flask's reloader works.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
