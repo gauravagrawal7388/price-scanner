@@ -162,24 +162,30 @@ def initialize_services():
     # --- Connect to Google Sheets ---
     try:
         print("[RENDER-DEBUG] 1. Preparing to create Google credentials object using the MODERN library...")
-        # --- CHANGE: Use the modern library for authentication ---
         creds = Credentials.from_service_account_file(JSON_KEY_FILE_PATH, scopes=SCOPE)
+        
         print("[RENDER-DEBUG] 2. Credentials object created. Preparing to authorize...")
         client = gspread.authorize(creds)
+        
         print("[RENDER-DEBUG] 3. Authorization successful. Preparing to open sheet...")
+        
+        # --- MODIFICATION: Added granular logging to pinpoint failure ---
+        print(f"[RENDER-DEBUG] 3a. Attempting to open sheet with ID: {GOOGLE_SHEET_ID}...", flush=True)
         gsheet = client.open_by_key(GOOGLE_SHEET_ID)
+        print("[RENDER-DEBUG] 3b. Successfully opened sheet object by key.", flush=True)
+        
         stock_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
         cache_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
+        print("[RENDER-DEBUG] 3c. Successfully accessed worksheet.", flush=True)
+        # --- END MODIFICATION ---
+
         print("✅ Successfully connected to Google Sheets.")
     except Exception as e:
-        print(f"❌ Error connecting to Google Sheets: {e}")
-        # ---
-        # NEW: Log the full traceback for detailed error analysis
+        print(f"❌ Error connecting to Google Sheets: {e}", flush=True)
         import traceback
-        print("--- Full Traceback ---")
+        print("--- Full Traceback ---", flush=True)
         traceback.print_exc()
-        print("----------------------")
-        # ---
+        print("----------------------", flush=True)
         sys.exit()
 
     # --- Authenticate with Angel One ---
@@ -1023,7 +1029,8 @@ def start_background_tasks():
 # This block ensures the background tasks are started only once, 
 # even in environments that might spawn multiple worker processes.
 # This is the correct way to start background jobs with Gunicorn.
-if 'BACKGROUND_TASS_STARTED' not in os.environ:
+# --- MODIFICATION: Corrected typo from TASS to TASKS ---
+if 'BACKGROUND_TASKS_STARTED' not in os.environ:
     print("[RENDER-DEBUG] First worker process detected. Starting background tasks.")
     background_thread = threading.Thread(target=start_background_tasks, daemon=True)
     background_thread.start()
@@ -1039,3 +1046,4 @@ if __name__ == "__main__":
     # The background tasks are already started above, so we just run the app.
     # Note: On Windows, you might see the startup logs twice due to how Flask's reloader works.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
