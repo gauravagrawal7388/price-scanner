@@ -151,25 +151,24 @@ def ping():
 def initialize_services():
     """Connects to Google Sheets and Angel One SmartAPI."""
     global gsheet, cache_sheet, stock_sheet, smart_api_obj
-    print("[DEBUG] Initializing services...")
+    print("[DEBUG] Initializing services...", flush=True)
 
     # --- SET GLOBAL TIMEOUT FOR ALL NETWORK OPERATIONS ---
     # This is critical for Render's environment to prevent hangs.
-    print("[RENDER-DEBUG] Setting global socket timeout to 30 seconds...")
+    print("[RENDER-DEBUG] Setting global socket timeout to 30 seconds...", flush=True)
     socket.setdefaulttimeout(30)
-    print("[RENDER-DEBUG] Global socket timeout set.")
+    print("[RENDER-DEBUG] Global socket timeout set.", flush=True)
 
     # --- Connect to Google Sheets ---
     try:
-        print("[RENDER-DEBUG] 1. Preparing to create Google credentials object using the MODERN library...")
+        print("[RENDER-DEBUG] 1. Preparing to create Google credentials object using the MODERN library...", flush=True)
         creds = Credentials.from_service_account_file(JSON_KEY_FILE_PATH, scopes=SCOPE)
         
-        print("[RENDER-DEBUG] 2. Credentials object created. Preparing to authorize...")
+        print("[RENDER-DEBUG] 2. Credentials object created. Preparing to authorize...", flush=True)
         client = gspread.authorize(creds)
         
-        print("[RENDER-DEBUG] 3. Authorization successful. Preparing to open sheet...")
+        print("[RENDER-DEBUG] 3. Authorization successful. Preparing to open sheet...", flush=True)
         
-        # --- MODIFICATION: Added granular logging to pinpoint failure ---
         print(f"[RENDER-DEBUG] 3a. Attempting to open sheet with ID: {GOOGLE_SHEET_ID}...", flush=True)
         gsheet = client.open_by_key(GOOGLE_SHEET_ID)
         print("[RENDER-DEBUG] 3b. Successfully opened sheet object by key.", flush=True)
@@ -177,9 +176,8 @@ def initialize_services():
         stock_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
         cache_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
         print("[RENDER-DEBUG] 3c. Successfully accessed worksheet.", flush=True)
-        # --- END MODIFICATION ---
 
-        print("✅ Successfully connected to Google Sheets.")
+        print("✅ Successfully connected to Google Sheets.", flush=True)
     except Exception as e:
         print(f"❌ Error connecting to Google Sheets: {e}", flush=True)
         import traceback
@@ -190,48 +188,45 @@ def initialize_services():
 
     # --- Authenticate with Angel One ---
     try:
-        # --- NEW DEBUGGING STEP 1 ---
-        print("🔐 Authenticating with Angel One SmartAPI...")
-        print("   [ANGEL-DEBUG] Step 1: Creating SmartConnect object...")
+        # --- DEBUGGING STEP 1 ---
+        print("🔐 Authenticating with Angel One SmartAPI...", flush=True)
+        print("   [ANGEL-DEBUG] Step 1: Creating SmartConnect object...", flush=True)
         smart_api_obj = SmartConnect(api_key=API_KEY)
-        print("   [ANGEL-DEBUG] Step 1: SmartConnect object created successfully.")
+        print("   [ANGEL-DEBUG] Step 1: SmartConnect object created successfully.", flush=True)
 
-        # --- NEW DEBUGGING STEP 2 ---
-        print("   [ANGEL-DEBUG] Step 2: Generating TOTP...")
+        # --- DEBUGGING STEP 2 ---
+        print("   [ANGEL-DEBUG] Step 2: Generating TOTP...", flush=True)
         totp = pyotp.TOTP(TOTP_SECRET).now()
-        print(f"   [ANGEL-DEBUG] Step 2: TOTP generated: {totp}")
+        print(f"   [ANGEL-DEBUG] Step 2: TOTP generated: {totp}", flush=True)
 
-        # --- NEW DEBUGGING STEP 3 ---
-        print(f"   [ANGEL-DEBUG] Step 3: Calling generateSession for client code {CLIENT_CODE}...")
+        # --- DEBUGGING STEP 3 ---
+        print(f"   [ANGEL-DEBUG] Step 3: Calling generateSession for client code {CLIENT_CODE}...", flush=True)
         data = smart_api_obj.generateSession(CLIENT_CODE, MPIN, totp)
-        print(f"   [ANGEL-DEBUG] Step 3: Raw response from generateSession: {data}")
+        print(f"   [ANGEL-DEBUG] Step 3: Raw response from generateSession: {data}", flush=True)
 
-        # --- NEW DEBUGGING STEP 4 ---
-        print("   [ANGEL-DEBUG] Step 4: Validating the session response...")
+        # --- DEBUGGING STEP 4 ---
+        print("   [ANGEL-DEBUG] Step 4: Validating the session response...", flush=True)
         if data and data.get('status') and data.get('data', {}).get('jwtToken'):
-            print("   [ANGEL-DEBUG] Step 4: Validation successful. JWT Token found.")
-            print("✅ Angel One session generated successfully!")
+            print("   [ANGEL-DEBUG] Step 4: Validation successful. JWT Token found.", flush=True)
+            print("✅ Angel One session generated successfully!", flush=True)
         else:
-            # This 'else' block will now explicitly show the failure reason
-            print("   [ANGEL-DEBUG] Step 4: Validation FAILED. Response was invalid or did not contain a JWT Token.")
+            print("   [ANGEL-DEBUG] Step 4: Validation FAILED. Response was invalid or did not contain a JWT Token.", flush=True)
             error_message = data.get('message', 'No specific error message returned from API.')
-            print(f"   [ANGEL-DEBUG] API Error Message: {error_message}")
-            # Raising an exception to stop the script, as before.
+            print(f"   [ANGEL-DEBUG] API Error Message: {error_message}", flush=True)
             raise Exception(f"Authentication failed. Full Response: {data}")
 
     except Exception as e:
-        print(f"❌ An exception occurred during Angel One session generation: {e}")
-        # --- NEW: ADDING FULL TRACEBACK FOR DEEPER DEBUGGING ---
+        print(f"❌ An exception occurred during Angel One session generation: {e}", flush=True)
         import traceback
-        print("--- Full Traceback ---")
+        print("--- Full Traceback ---", flush=True)
         traceback.print_exc()
-        print("----------------------")
+        print("----------------------", flush=True)
         sys.exit()
 
     # --- Download Instrument Master List ---
     try:
         global instrument_master_list, instrument_token_map
-        print("📦 Downloading Angel One instrument master list...")
+        print("📦 Downloading Angel One instrument master list...", flush=True)
         response = requests.get(INSTRUMENT_LIST_URL)
         response.raise_for_status()
         instrument_master_list = response.json()
@@ -239,11 +234,11 @@ def initialize_services():
         for item in instrument_master_list:
             key = (item.get('symbol', '').upper(), item.get('exch_seg', '').upper())
             instrument_token_map[key] = item.get('token')
-        print(f"✅ Instrument list downloaded and processed. Found {len(instrument_master_list)} instruments.")
+        print(f"✅ Instrument list downloaded and processed. Found {len(instrument_master_list)} instruments.", flush=True)
     except Exception as e:
-        print(f"❌ FATAL: Could not download or process the master instrument list: {e}. Exiting.")
+        print(f"❌ FATAL: Could not download or process the master instrument list: {e}. Exiting.", flush=True)
         sys.exit()
-    print("[DEBUG] Services initialized successfully.")
+    print("[DEBUG] Services initialized successfully.", flush=True)
 
 def get_token_for_symbol(symbol, exchange):
     """
@@ -1073,3 +1068,4 @@ if __name__ == "__main__":
     # The background tasks are already started above, so we just run the app.
     # Note: On Windows, you might see the startup logs twice due to how Flask's reloader works.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
