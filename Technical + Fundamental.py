@@ -968,15 +968,20 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
 
 def run_daily_scan():
     """This function contains the entire 4-hour analysis logic."""
-    print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Starting the daily 4-hour scan...")
+    print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Starting the daily 4-hour scan...", flush=True)
     
     initialize_services()
     
     try:
         # --- NEW WORKFLOW ---
         # 1. First, get all symbols from the sheet and find their tokens
-        print("[DEBUG] Pre-loading all symbols from Google Sheet...")
+        print("[DEBUG] Pre-loading all symbols from Google Sheet...", flush=True)
+        # --- NEW DEBUGGING STEP ---
+        print("   [SHEET-DEBUG] About to call stock_sheet.get_all_values()...", flush=True)
         all_sheet_data = stock_sheet.get_all_values()[2:]
+        print("   [SHEET-DEBUG] Successfully fetched all values from the sheet.", flush=True)
+        # --- END DEBUGGING STEP ---
+
         symbols_raw = [row[34] for row in all_sheet_data if len(row) > 34 and row[34]]
         symbol_to_row_map = {
             row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): index + 3 
@@ -997,9 +1002,15 @@ def run_daily_scan():
             if token_bse:
                 symbols_for_processing.append({'base_symbol': clean_s, 'token': token_bse, 'exchange': exch_bse})
 
-        print(f"✅ Found tokens for {len(symbols_for_processing)} total symbols.")
-    except Exception as e:
-        print(f"❌ Critical error during symbol pre-loading: {e}")
+        print(f"✅ Found tokens for {len(symbols_for_processing)} total symbols.", flush=True)
+    except BaseException as e: # Changed from Exception to BaseException to catch everything
+        print(f"❌ Critical error during symbol pre-loading: {e}", flush=True)
+        # --- NEW DEBUGGING STEP ---
+        import traceback
+        print("--- Full Traceback for Pre-loading Error ---", flush=True)
+        traceback.print_exc()
+        print("------------------------------------------", flush=True)
+        # --- END DEBUGGING STEP ---
         symbols_for_processing = []
         symbol_to_row_map = {}
 
@@ -1009,7 +1020,7 @@ def run_daily_scan():
     # 3. Run the main analysis scan
     run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_row_map)
         
-    print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Daily scan has finished.")
+    print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Daily scan has finished.", flush=True)
 
 
 def run_scheduler():
