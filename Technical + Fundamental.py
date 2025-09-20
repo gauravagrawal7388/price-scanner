@@ -30,10 +30,10 @@ import schedule
 from zoneinfo import ZoneInfo
 # --- END: IMPORTS FOR 24/7 SCHEDULER ---
 
-print("="*60)
-print("--- [RENDER-DEBUG] Script execution started (Top Level) ---")
-print(f"--- Timestamp: {datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')} ---")
-print("="*60)
+print("="*60, flush=True)
+print("--- [RENDER-DEBUG] Script execution started (Top Level) ---", flush=True)
+print(f"--- Timestamp: {datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')} ---", flush=True)
+print("="*60, flush=True)
 
 
 # ==============================================================================
@@ -118,12 +118,12 @@ SYMBOLS_TO_EXCLUDE = {
 # Determine the path for the service account JSON key file
 if os.path.exists("/etc/secrets/creds.json"):
     JSON_KEY_FILE_PATH = "/etc/secrets/creds.json"
-    print("[RENDER-DEBUG] Using production credential path: /etc/secrets/creds.json")
+    print("[RENDER-DEBUG] Using production credential path: /etc/secrets/creds.json", flush=True)
 else:
     # Fallback for local development. Assumes the key file is in the same directory.
     current_dir = os.path.dirname(os.path.abspath(__file__))
     JSON_KEY_FILE_PATH = os.path.join(current_dir, "the-money-method-ad6d7-6d23c192b74e.json")
-    print(f"[RENDER-DEBUG] Using local development credential path: {JSON_KEY_FILE_PATH}")
+    print(f"[RENDER-DEBUG] Using local development credential path: {JSON_KEY_FILE_PATH}", flush=True)
 
 
 # Define the necessary OAuth2 scopes for Google Sheets and Drive access
@@ -135,7 +135,7 @@ SCOPE = [
 
 # --- START: FLASK WEB SERVICE SETUP ---
 app = Flask(__name__)
-print("[RENDER-DEBUG] Flask app object created.")
+print("[RENDER-DEBUG] Flask app object created.", flush=True)
 
 @app.route('/ping')
 def ping():
@@ -182,7 +182,7 @@ def initialize_services():
         print(f"❌ Error connecting to Google Sheets: {e}", flush=True)
         import traceback
         print("--- Full Traceback ---", flush=True)
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stdout)
         print("----------------------", flush=True)
         sys.exit()
 
@@ -219,7 +219,7 @@ def initialize_services():
         print(f"❌ An exception occurred during Angel One session generation: {e}", flush=True)
         import traceback
         print("--- Full Traceback ---", flush=True)
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stdout)
         print("----------------------", flush=True)
         sys.exit()
 
@@ -292,10 +292,10 @@ def fetch_history_angelone(token, exchange, interval, from_date, to_date):
             time.sleep(API_REQUEST_DELAY)
 
             if attempt > 0:
-                print(f"   [RETRY] Waiting {retry_delay}s before retrying token {token} (Attempt {attempt + 1}/{max_retries + 1})")
+                print(f"   [RETRY] Waiting {retry_delay}s before retrying token {token} (Attempt {attempt + 1}/{max_retries + 1})", flush=True)
                 time.sleep(retry_delay)
 
-            # print(f"[DEBUG] Requesting {interval} history for token {token}. Params: {historic_param}")
+            # print(f"[DEBUG] Requesting {interval} history for token {token}. Params: {historic_param}", flush=True)
             response = smart_api_obj.getCandleData(historic_param)
             
             if response and response.get("status") and response.get("data"):
@@ -309,21 +309,21 @@ def fetch_history_angelone(token, exchange, interval, from_date, to_date):
                 df.set_index('Timestamp', inplace=True)
                 return df
             else:
-                # print(f"   [WARN] Invalid or empty response for token {token}.")
-                # print(f"   [DIAGNOSTIC] Raw server response: {response}")
+                # print(f"   [WARN] Invalid or empty response for token {token}.", flush=True)
+                # print(f"   [DIAGNOSTIC] Raw server response: {response}", flush=True)
                 if attempt < max_retries:
                     continue 
                 else:
                     break 
 
         except Exception as e:
-            # print(f"   [ERROR] API call failed for token {token}: {e}")
+            # print(f"   [ERROR] API call failed for token {token}: {e}", flush=True)
             if attempt < max_retries:
                 continue 
             else:
                 break 
 
-    # print(f"❌ All retries failed for token {token}. Skipping.")
+    # print(f"❌ All retries failed for token {token}. Skipping.", flush=True)
     return pd.DataFrame()
 
 def fetch_history_for_ath_simple(token, exchange, interval, from_date, to_date):
@@ -338,7 +338,7 @@ def fetch_history_for_ath_simple(token, exchange, interval, from_date, to_date):
             "fromdate": from_date.strftime('%Y-%m-%d %H:%M'),
             "todate": to_date.strftime('%Y-%m-%d %H:%M')
         }
-        # print(f"[DEBUG] (ATH) Requesting {interval} history for token {token}...")
+        # print(f"[DEBUG] (ATH) Requesting {interval} history for token {token}...", flush=True)
         response = smart_api_obj.getCandleData(historic_param)
         
         if response and response.get("status") and response.get("data"):
@@ -355,7 +355,7 @@ def fetch_history_for_ath_simple(token, exchange, interval, from_date, to_date):
             return pd.DataFrame()
 
     except Exception as e:
-        print(f"❌ (ATH) API call failed for token {token}: {e}")
+        print(f"❌ (ATH) API call failed for token {token}: {e}", flush=True)
         return pd.DataFrame()
 
 
@@ -372,7 +372,7 @@ def fetch_full_history_for_ath(token, exchange):
         if i == 0:
             initial_check_df = fetch_history_for_ath_simple(token, exchange, "ONE_DAY", end_date - relativedelta(months=1), end_date)
             if initial_check_df.empty:
-                # print(f"[DEBUG] No recent data for token {token}. Skipping ATH fetch.")
+                # print(f"[DEBUG] No recent data for token {token}. Skipping ATH fetch.", flush=True)
                 return None
 
         df_chunk = fetch_history_for_ath_simple(token, exchange, "ONE_DAY", start_date, end_date)
@@ -381,17 +381,17 @@ def fetch_full_history_for_ath(token, exchange):
         if not df_chunk.empty:
             all_data.append(df_chunk)
         else:
-            # print(f"[DEBUG]   Empty chunk for token {token}. Assuming end of history.")
+            # print(f"[DEBUG]   Empty chunk for token {token}. Assuming end of history.", flush=True)
             break 
         end_date = start_date - timedelta(days=1)
 
     if not all_data:
-        # print(f"[DEBUG] No historical data found for token {token}.")
+        # print(f"[DEBUG] No historical data found for token {token}.", flush=True)
         return None
 
     full_df = pd.concat(all_data)
     ath = full_df['High'].max()
-    # print(f"[DEBUG] Calculated ATH for token {token} is {ath} from {len(full_df)} candles.")
+    # print(f"[DEBUG] Calculated ATH for token {token} is {ath} from {len(full_df)} candles.", flush=True)
     return ath
 
 
@@ -435,7 +435,7 @@ def get_fno_symbols():
         # --- NEW DEBUGGING STEP ---
         import traceback
         print("--- Full Traceback for F&O Error ---", flush=True)
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stdout)
         print("------------------------------------", flush=True)
         return set()
 
@@ -475,7 +475,7 @@ def get_quarterly_growth(symbol, exchange):
         
         # Check if we have at least two quarters of data
         if quarterly_financials.empty or len(quarterly_financials.columns) < 2:
-            # print(f"   -> [INFO] Not enough quarterly data for {ticker_symbol} to calculate growth.")
+            # print(f"   -> [INFO] Not enough quarterly data for {ticker_symbol} to calculate growth.", flush=True)
             return None, None
 
         # Get the latest quarter (Q1) and the previous quarter (Q2)
@@ -536,7 +536,7 @@ def get_quarterly_growth(symbol, exchange):
         return profit_growth, revenue_growth
 
     except Exception as e:
-        # print(f"   [WARN] Could not fetch or calculate growth for {ticker_symbol}: {e}")
+        # print(f"   [WARN] Could not fetch or calculate growth for {ticker_symbol}: {e}", flush=True)
         return None, None
         
 # ==============================================================================
@@ -694,6 +694,10 @@ def calculate_intraday_momentum_scan(intraday_data, is_fno):
 
 def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_row_map):
     """Main function to run the entire scanning process."""
+    print("\n" + "="*80, flush=True)
+    print("--- [START] ENTERING 'run_ath_and_price_scan' FUNCTION ---", flush=True)
+    print("="*80 + "\n", flush=True)
+
     try:
         print("\n--- Starting ATH + Price Scan Logic ---", flush=True)
 
@@ -705,7 +709,7 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
             (now.weekday() > 4) or
             (now.weekday() == 0 and now.time() <= dt_time(8, 0))
         )
-        print(f"[ATH-SCAN] 1a. Is ATH update allowed? {ath_allowed}", flush=True)
+        print(f"[ATH-SCAN] 1a. Is ATH update allowed? -> {ath_allowed}", flush=True)
 
 
         # === ATH Cache Update (Columns AJ and AK) ===
@@ -716,37 +720,43 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
             updates_to_sheet = []
 
             try:
-                print("   [ATH-SCAN] 2a. Getting all values from cache_sheet for ATH update...", flush=True)
+                print("   [ATH-SCAN] 2a. Attempting to get all values from cache_sheet for ATH update...", flush=True)
                 all_cache_data = cache_sheet.get_all_values()
-                print(f"   [ATH-SCAN] 2b. Successfully got {len(all_cache_data)} rows for ATH update.", flush=True)
+                print(f"   [ATH-SCAN] 2b. Successfully fetched {len(all_cache_data)} total rows from the sheet for ATH update.", flush=True)
             except BaseException as e:
-                print(f"❌ Error reading from ATH Cache sheet: {e}", flush=True)
+                print(f"   [ATH-SCAN] ❌ CRITICAL ERROR: Could not read from ATH Cache sheet: {e}", flush=True)
                 import traceback
-                traceback.print_exc()
+                traceback.print_exc(file=sys.stdout)
                 all_cache_data = []
 
+            print("   [ATH-SCAN] 2c. Building a map of existing cache data...", flush=True)
             cache_data_map = {
                 row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): 
                 (row[35] if len(row) > 35 else None, row[36] if len(row) > 36 else None) 
                 for row in all_cache_data[2:] if len(row) > 34 and row[34].strip()
             }
+            print(f"   [ATH-SCAN] 2d. Cache data map built with {len(cache_data_map)} entries.", flush=True)
             
+            print("   [ATH-SCAN] 2e. Identifying symbols that require an ATH update (last update date is not today)...", flush=True)
             symbols_to_update_ath = [s for s in symbols_for_processing if cache_data_map.get(s['base_symbol'], (None, None))[1] != today_str]
             total_symbols_to_update = len(symbols_to_update_ath)
-            print(f"   [ATH-SCAN] 2c. Found {total_symbols_to_update} symbols requiring an ATH update.", flush=True)
+            print(f"   [ATH-SCAN] 2f. Found {total_symbols_to_update} symbols requiring an ATH update today.", flush=True)
             
             for i, symbol_info in enumerate(symbols_to_update_ath):
                 base_symbol = symbol_info['base_symbol']
-                print(f"      [ATH-SCAN] [{i+1}/{total_symbols_to_update}] Processing ATH for {base_symbol}...", flush=True)
-                
                 token = symbol_info['token']
                 exchange = symbol_info['exchange']
                 
+                print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] Processing ATH for '{base_symbol}' (Token: {token})", flush=True)
+                
                 gs_row_num = symbol_to_row_map.get(base_symbol)
                 if not gs_row_num:
+                    print(f"      [ATH-SCAN]---> [WARN] Could not find row number for '{base_symbol}'. Skipping.", flush=True)
                     continue 
-
+                
+                print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] Calling 'fetch_full_history_for_ath'...", flush=True)
                 new_ath = fetch_full_history_for_ath(token, exchange)
+                print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] API call returned. New ATH: {new_ath}", flush=True)
 
                 if new_ath is not None and math.isfinite(new_ath):
                     new_ath = round(new_ath, 2)
@@ -756,74 +766,89 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
                         if prev_ath_str: prev_ath = float(prev_ath_str)
                     except (ValueError, TypeError): pass
 
+                    print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] Previous ATH: {prev_ath}. New ATH: {new_ath}", flush=True)
                     if new_ath != prev_ath:
+                        print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] ATH has changed. Adding to batch update list.", flush=True)
                         updates_to_sheet.append({'range': f'AJ{gs_row_num}:AK{gs_row_num}', 'values': [[new_ath, today_str]]})
                         updates += 1
+                else:
+                    print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] No valid ATH found. Skipping update.", flush=True)
                 time.sleep(API_REQUEST_DELAY)
 
             if updates_to_sheet:
                 try:
-                    print(f"   [ATH-SCAN] 2d. Found {len(updates_to_sheet)} ATH updates to write. Performing batch update...", flush=True)
+                    print(f"\n   [ATH-SCAN] 2g. Found {len(updates_to_sheet)} total ATH updates to write. Performing batch update to Google Sheet...", flush=True)
                     cache_sheet.batch_update(updates_to_sheet, value_input_option='USER_ENTERED')
-                    print(f"✅ ATH Cache update complete: {updates} record(s) updated.", flush=True)
+                    print(f"   [ATH-SCAN] ✅ ATH Cache update complete: {updates} record(s) successfully updated in the sheet.", flush=True)
                 except BaseException as e:
-                    print(f"❌ Error performing batch update for ATH Cache: {e}", flush=True)
+                    print(f"   [ATH-SCAN] ❌ CRITICAL ERROR: Could not perform batch update for ATH Cache: {e}", flush=True)
                     import traceback
-                    traceback.print_exc()
+                    traceback.print_exc(file=sys.stdout)
             else:
-                print("ℹ️ No ATH records needed updating.", flush=True)
+                print("\n   [ATH-SCAN] ℹ️ No ATH records needed updating.", flush=True)
         else:
-            print(f"🕒 Skipping ATH Cache update (not in allowed time range).", flush=True)
+            print(f"🕒 Skipping ATH Cache update because it is not within the allowed time range.", flush=True)
 
 
         # === Price Scan - Fetching LTPs ===
         print("\n⚡ [LTP-SCAN] 3. Fetching LTPs for price scan using Angel One API...", flush=True)
         try:
-            print("   [LTP-SCAN] 3a. Getting all values from cache_sheet for LTP calculation...", flush=True)
+            print("   [LTP-SCAN] 3a. Attempting to get all values from cache_sheet for LTP calculation...", flush=True)
             ath_data_raw = cache_sheet.get_all_values()
+            print(f"   [LTP-SCAN] 3b. Successfully fetched {len(ath_data_raw)} total rows from the sheet.", flush=True)
             ath_data = [row for row in ath_data_raw[2:] if len(row) > 35 and row[34].strip()]
-            print(f"   [LTP-SCAN] 3b. Successfully got {len(ath_data)} rows with ATH data.", flush=True)
+            print(f"   [LTP-SCAN] 3c. Filtered down to {len(ath_data)} rows with valid data for ATH map.", flush=True)
         except BaseException as e:
-            print(f"❌ Error reading ATH data for LTP calculation: {e}", flush=True)
+            print(f"   [LTP-SCAN] ❌ CRITICAL ERROR: Could not read ATH data for LTP calculation: {e}", flush=True)
             import traceback
-            traceback.print_exc()
+            traceback.print_exc(file=sys.stdout)
             ath_data = []
 
+        print("   [LTP-SCAN] 3d. Building ATH map from sheet data...", flush=True)
         ath_map = {row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): float(row[35]) for row in ath_data if row[35]}
+        print(f"   [LTP-SCAN] 3e. ATH map built with {len(ath_map)} entries.", flush=True)
 
 
         ltp_map = {}
         tokens_to_fetch_ltp = [s['token'] for s in symbols_for_processing if s['token']]
+        print(f"   [LTP-SCAN] 3f. Preparing to fetch LTPs for {len(tokens_to_fetch_ltp)} total tokens.", flush=True)
+
         if tokens_to_fetch_ltp:
             tokens_by_exchange = {}
             for s_info in symbols_for_processing:
                 if s_info['token'] not in tokens_by_exchange.setdefault(s_info['exchange'], []):
                     tokens_by_exchange[s_info['exchange']].append(s_info['token'])
+            
+            print("   [LTP-SCAN] 3g. Grouped tokens by exchange.", flush=True)
 
             for exchange, tokens in tokens_by_exchange.items():
-                print(f"   [LTP-SCAN] 3c. Fetching LTPs for {len(tokens)} tokens on {exchange}...", flush=True)
+                print(f"   [LTP-SCAN]---> Processing {len(tokens)} tokens for exchange: {exchange}", flush=True)
                 for i in range(0, len(tokens), 50):
                     batch_tokens = tokens[i:i+50]
                     payload = {"mode": "LTP", "exchangeTokens": {exchange: batch_tokens}}
                     try:
-                        print(f"      [LTP-SCAN] 3d. Fetching batch {i//50 + 1}...", flush=True)
+                        print(f"      [LTP-SCAN]---> Fetching batch {i//50 + 1} ({len(batch_tokens)} tokens)...", flush=True)
                         response = smart_api_obj.getMarketData(**payload)
                         if response and response.get("status") and response.get("data"):
                             for item in response["data"]["fetched"]:
                                 ltp_map[item['symbolToken']] = item.get('ltp')
+                            print(f"      [LTP-SCAN]---> Batch {i//50 + 1} successful.", flush=True)
+                        else:
+                            print(f"      [LTP-SCAN]---> [WARN] Batch {i//50 + 1} returned invalid data. Response: {response}", flush=True)
+
                         time.sleep(API_REQUEST_DELAY)
                     except BaseException as e:
-                        print(f"❌ Error fetching LTP batch for {exchange}: {e}", flush=True)
+                        print(f"      [LTP-SCAN]---> ❌ ERROR fetching LTP batch for {exchange}: {e}", flush=True)
                         import traceback
-                        traceback.print_exc()
+                        traceback.print_exc(file=sys.stdout)
 
-        print(f"✅ LTP data fetched for {len(ltp_map)} records.", flush=True)
+        print(f"✅ [LTP-SCAN] LTP data fetching complete. Found {len(ltp_map)} valid records.", flush=True)
 
         # === NEW EFFICIENT WORKFLOW =================================================
-        print("\n🚚 [ANALYSIS] 4. Starting efficient detailed analysis...", flush=True)
+        print("\n🚚 [ANALYSIS] 4. Starting efficient detailed analysis workflow...", flush=True)
 
         # --- STEP 1: Pre-filter symbols that have basic data ---
-        print("   [ANALYSIS] 4a. Pre-filtering symbols with LTP and ATH data...", flush=True)
+        print("   [ANALYSIS] 4a. Pre-filtering symbols: checking for valid LTP and ATH data...", flush=True)
         pre_filtered_symbols = []
         for s_info in symbols_for_processing:
             ltp = ltp_map.get(s_info['token'])
@@ -831,26 +856,27 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
             if ltp and ath:
                 s_info.update({'ltp': ltp, 'ath': ath})
                 pre_filtered_symbols.append(s_info)
-        print(f"   [ANALYSIS] 4b. Found {len(pre_filtered_symbols)} pre-filtered symbols.", flush=True)
+        print(f"   [ANALYSIS] 4b. Found {len(pre_filtered_symbols)} symbols after pre-filtering.", flush=True)
 
         # --- STEP 2: Fetch 1 year of daily data ONCE for pre-filtered stocks ---
-        print(f"   [ANALYSIS] 4c. Fetching 1 year of daily data for {len(pre_filtered_symbols)} stocks...", flush=True)
+        print(f"   [ANALYSIS] 4c. Starting to fetch 1 year of daily historical data for {len(pre_filtered_symbols)} stocks...", flush=True)
         historical_data_map = {}
         end_date = datetime.now()
         start_date = end_date - relativedelta(years=1)
-        for s_info in pre_filtered_symbols:
+        for i, s_info in enumerate(pre_filtered_symbols):
             token = s_info['token']
             exchange = s_info['exchange']
+            print(f"      [ANALYSIS]---> [{i+1}/{len(pre_filtered_symbols)}] Fetching daily data for '{s_info['base_symbol']}'...", flush=True)
             df_daily = fetch_history_angelone(token, exchange, "ONE_DAY", start_date, end_date)
             historical_data_map[token] = df_daily
-        print(f"   [ANALYSIS] 4d. Fetched daily data for {len(historical_data_map)} stocks.", flush=True)
+        print(f"   [ANALYSIS] 4d. ✅ Finished fetching historical data. Stored data for {len(historical_data_map)} stocks.", flush=True)
 
         # --- STEP 3: Perform final filtering and all calculations from stored data ---
-        print("   [ANALYSIS] 4e. Performing final filtering and all calculations...", flush=True)
+        print("   [ANALYSIS] 4e. Performing final filtering and all calculations on in-memory data...", flush=True)
         scanned_symbols_info = []
         final_output_rows = []
         
-        print("      [ANALYSIS] Applying filter: F&O stocks auto-included, Cash stocks filtered by -40% from ATH...", flush=True)
+        print("      [ANALYSIS]---> Applying filter: F&O stocks auto-included, Cash stocks filtered by drop >= -40% from ATH...", flush=True)
         for s_info in pre_filtered_symbols:
             token = s_info['token']
             daily_df = historical_data_map.get(token)
@@ -871,12 +897,13 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
                 s_info['drop_pct'] = drop_pct
                 scanned_symbols_info.append(s_info)
 
-        print(f"      [ANALYSIS] Found {len(scanned_symbols_info)} stocks passing the filter.", flush=True)
-        print("      [ANALYSIS] Calculating all technical indicators for filtered stocks...", flush=True)
+        print(f"      [ANALYSIS]---> Found {len(scanned_symbols_info)} stocks passing the final drop percentage filter.", flush=True)
+        print("      [ANALYSIS]---> Now calculating all technical indicators for these filtered stocks...", flush=True)
 
-        for s_info in scanned_symbols_info:
+        for i, s_info in enumerate(scanned_symbols_info):
             token = s_info['token']
             daily_df = historical_data_map.get(token)
+            print(f"         [ANALYSIS]--->>> [{i+1}/{len(scanned_symbols_info)}] Calculating for '{s_info['base_symbol']}'...", flush=True)
                 
             sma_data = calculate_sma(daily_df)
             pm_flag = calculate_pm_logic(daily_df)
@@ -898,6 +925,7 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
             is_fno = s_info['base_symbol'] in fno_symbols_set
             intraday_up_result, intraday_down_result = calculate_intraday_momentum_scan(intraday_data_list, is_fno)
 
+            print(f"         [ANALYSIS]--->>> [{i+1}/{len(scanned_symbols_info)}] Fetching quarterly growth data for '{s_info['base_symbol']}'...", flush=True)
             profit_growth, revenue_growth = get_quarterly_growth(s_info['base_symbol'], s_info['exchange'])
             time.sleep(0.2) 
 
@@ -930,52 +958,58 @@ def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_ro
             ]
             final_output_rows.append(row_data)
 
-        print(f"✅ [ANALYSIS] Final analysis complete. Found {len(scanned_symbols_info)} stocks passing all filters.", flush=True)
+        print(f"✅ [ANALYSIS] Final analysis calculation loop complete. Have results for {len(scanned_symbols_info)} stocks.", flush=True)
 
         # --- STEP 4: Write filtered symbols and results to Google Sheet ---
-        print("   [ANALYSIS] 4f. Writing final results to the sheet...", flush=True)
+        print("   [ANALYSIS] 4f. Preparing to write final results to the Google Sheet...", flush=True)
         if scanned_symbols_info:
             try:
-                print("      [ANALYSIS] Clearing old data from B3:Q2500...", flush=True)
+                print("      [ANALYSIS]---> Step 1: Clearing old data from sheet range B3:Q2500...", flush=True)
                 cache_sheet.batch_clear(['B3:Q2500'])
+                print("      [ANALYSIS]---> Step 1: Old data cleared successfully.", flush=True)
                 
-                print("      [ANALYSIS] Writing symbols to column B...", flush=True)
+                print("      [ANALYSIS]---> Step 2: Writing new symbol list to column B...", flush=True)
                 column_b_data = [[f"{s['exchange']}:{s['base_symbol']},"] for s in scanned_symbols_info]
                 range_to_update_b = f"B3:B{len(column_b_data) + 2}"
                 cache_sheet.update(values=column_b_data, range_name=range_to_update_b, value_input_option='USER_ENTERED')
-                print(f"      [ANALYSIS] Wrote {len(column_b_data)} filtered symbols to Column B.", flush=True)
+                print(f"      [ANALYSIS]---> Step 2: Wrote {len(column_b_data)} filtered symbols to Column B.", flush=True)
 
                 if final_output_rows:
-                    print("      [ANALYSIS] Writing detailed results to columns C:Q...", flush=True)
+                    print("      [ANALYSIS]---> Step 3: Writing detailed results to columns C:Q...", flush=True)
                     range_to_update_details = f"C3:Q{len(final_output_rows) + 2}"
                     cache_sheet.update(values=final_output_rows, range_name=range_to_update_details, value_input_option='USER_ENTERED')
+                    print("      [ANALYSIS]---> Step 3: Detailed results written.", flush=True)
                     
-                    print("      [ANALYSIS] Applying number formatting...", flush=True)
+                    print("      [ANALYSIS]---> Step 4: Applying number formatting to relevant columns...", flush=True)
                     cache_sheet.format(f"D3:F{len(final_output_rows) + 2}", {'numberFormat': {'type': 'NUMBER', 'pattern': '0.00'}})
                     cache_sheet.format(f"P3:Q{len(final_output_rows) + 2}", {'numberFormat': {'type': 'PERCENT', 'pattern': '0.00"%"'}})
-                    print(f"   ✅ All detailed scan results written to ATH Cache sheet.", flush=True)
+                    print(f"   [ANALYSIS] ✅ All detailed scan results written and formatted in ATH Cache sheet.", flush=True)
 
             except BaseException as e:
-                print(f"❌ Error writing data to ATH Cache sheet: {e}", flush=True)
+                print(f"   [ANALYSIS] ❌ CRITICAL ERROR: Could not write data to ATH Cache sheet: {e}", flush=True)
                 import traceback
-                traceback.print_exc()
+                traceback.print_exc(file=sys.stdout)
         else:
-            print("ℹ️ No symbols passed the final filter. Clearing old results.", flush=True)
+            print("ℹ️ No symbols passed the final filter. Clearing old results from sheet.", flush=True)
             try:
                 cache_sheet.batch_clear(['B3:Q2500'])
             except BaseException as e:
-                print(f"❌ Error clearing old results: {e}", flush=True)
+                print(f"❌ CRITICAL ERROR: Could not clear old results from sheet: {e}", flush=True)
                 import traceback
-                traceback.print_exc()
+                traceback.print_exc(file=sys.stdout)
 
-        print("\n--- Technical scan process finished. ---", flush=True)
+        print("\n--- Technical scan process finished successfully. ---", flush=True)
     
     except BaseException as e:
-        print(f"❌ A FATAL, UNCAUGHT exception occurred in run_ath_and_price_scan: {e}", flush=True)
+        print(f"❌ A FATAL, UNCAUGHT exception occurred in 'run_ath_and_price_scan': {e}", flush=True)
         import traceback
         print("--- Full Traceback for ATH/Price Scan Error ---", flush=True)
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stdout)
         print("---------------------------------------------", flush=True)
+    
+    print("\n" + "="*80, flush=True)
+    print("--- [END] EXITING 'run_ath_and_price_scan' FUNCTION ---", flush=True)
+    print("="*80 + "\n", flush=True)
 
 
 # --- START: NEW WRAPPER AND SCHEDULER LOGIC ---
@@ -1022,7 +1056,7 @@ def run_daily_scan():
         # --- NEW DEBUGGING STEP ---
         import traceback
         print("--- Full Traceback for Pre-loading Error ---", flush=True)
-        traceback.print_exc()
+        traceback.print_exc(file=sys.stdout)
         print("------------------------------------------", flush=True)
         # --- END DEBUGGING STEP ---
         symbols_for_processing = []
@@ -1044,7 +1078,7 @@ def run_scheduler():
     """
     # NOTE: Render servers run on UTC time. 3:00 PM IST is 09:30 UTC.
     schedule.every().day.at("09:30").do(run_daily_scan)
-    print(f"--- [RENDER-DEBUG] Scheduler initialized. Waiting for the scheduled time (09:30 UTC / 15:00 IST). Current UTC time: {datetime.utcnow().strftime('%H:%M:%S')} ---")
+    print(f"--- [RENDER-DEBUG] Scheduler initialized. Waiting for the scheduled time (09:30 UTC / 15:00 IST). Current UTC time: {datetime.utcnow().strftime('%H:%M:%S')} ---", flush=True)
 
     while True:
         schedule.run_pending()
@@ -1057,18 +1091,18 @@ def start_background_tasks():
     This function runs the initial scan and then starts the scheduler.
     It's designed to be run in a background thread.
     """
-    print("\n" + "="*50)
-    print("--- [RENDER-DEBUG] Background task thread started ---")
-    print("--- [RENDER-DEBUG] Performing initial manual scan on startup... ---")
-    print("="*50 + "\n")
+    print("\n" + "="*50, flush=True)
+    print("--- [RENDER-DEBUG] Background task thread started ---", flush=True)
+    print("--- [RENDER-DEBUG] Performing initial manual scan on startup... ---", flush=True)
+    print("="*50 + "\n", flush=True)
     try:
         run_daily_scan()
-        print("\n" + "="*50)
-        print("--- [RENDER-DEBUG] Initial manual scan complete. ---")
-        print("--- [RENDER-DEBUG] The service will now start the scheduler for 3 PM runs. ---")
-        print("="*50 + "\n")
+        print("\n" + "="*50, flush=True)
+        print("--- [RENDER-DEBUG] Initial manual scan complete. ---", flush=True)
+        print("--- [RENDER-DEBUG] The service will now start the scheduler for 3 PM runs. ---", flush=True)
+        print("="*50 + "\n", flush=True)
     except Exception as e:
-        print(f"\n❌❌ [RENDER-DEBUG] An error occurred during the initial manual scan: {e}\n")
+        print(f"\n❌❌ [RENDER-DEBUG] An error occurred during the initial manual scan: {e}\n", flush=True)
     
     # After the initial scan, start the scheduler for subsequent daily runs
     run_scheduler()
@@ -1078,19 +1112,18 @@ def start_background_tasks():
 # This is the correct way to start background jobs with Gunicorn.
 # --- MODIFICATION: Corrected typo from TASS to TASKS ---
 if 'BACKGROUND_TASKS_STARTED' not in os.environ:
-    print("[RENDER-DEBUG] First worker process detected. Starting background tasks.")
+    print("[RENDER-DEBUG] First worker process detected. Starting background tasks.", flush=True)
     background_thread = threading.Thread(target=start_background_tasks, daemon=True)
     background_thread.start()
     os.environ['BACKGROUND_TASKS_STARTED'] = 'true'
-    print("[RENDER-DEBUG] Background thread has been successfully started.")
+    print("[RENDER-DEBUG] Background thread has been successfully started.", flush=True)
 else:
-    print("[RENDER-DEBUG] Background tasks were already started by another worker. Skipping.")
+    print("[RENDER-DEBUG] Background tasks were already started by another worker. Skipping.", flush=True)
 
 # The `if __name__ == "__main__":` block is for local execution only.
 # Gunicorn does not run this part.
 if __name__ == "__main__":
-    print("[LOCAL-DEBUG] Running locally. Starting Flask app directly.")
+    print("[LOCAL-DEBUG] Running locally. Starting Flask app directly.", flush=True)
     # The background tasks are already started above, so we just run the app.
     # Note: On Windows, you might see the startup logs twice due to how Flask's reloader works.
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
