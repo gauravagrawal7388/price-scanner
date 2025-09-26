@@ -39,16 +39,16 @@ TEST_STOCK_LIMIT = 200
 app = Flask(__name__)
 CORS(app)
 
-print("Connecting to AWS DynamoDB...")
+print("Connecting to AWS DynamoDB...", flush=True)
 try:
     dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
     data_table = dynamodb.Table(DATA_TABLE_NAME)
     results_table = dynamodb.Table(RESULTS_TABLE_NAME)
     data_table.load()
     results_table.load()
-    print("✅ Successfully connected to both DynamoDB tables.")
+    print("✅ Successfully connected to both DynamoDB tables.", flush=True)
 except Exception as e:
-    print(f"❌ Could not connect to DynamoDB. Error: {e}")
+    print(f"❌ Could not connect to DynamoDB. Error: {e}", flush=True)
     sys.exit()
 
 smartApi = SmartConnect(API_KEY)
@@ -67,25 +67,25 @@ class DecimalEncoder(json.JSONEncoder):
 # --- 3. END-OF-DAY DATA UPDATE LOGIC ---
 # ==============================================================================
 def run_daily_data_update():
-    print("\nStarting daily data update process...")
+    print("\nStarting daily data update process...", flush=True)
     try:
-        print("Connecting to Angel One SmartAPI...")
+        print("Connecting to Angel One SmartAPI...", flush=True)
         totp = pyotp.TOTP(TOTP_SECRET).now()
         session_data = smartApi.generateSession(CLIENT_CODE, MPIN, totp)
         if not session_data['status']:
-            print(f"❌ Angel One Login Failed: {session_data['message']}")
+            print(f"❌ Angel One Login Failed: {session_data['message']}", flush=True)
             return False
         else:
-            print("✅ Angel One session created successfully.")
+            print("✅ Angel One session created successfully.", flush=True)
     except Exception as e:
-        print(f"❌ Error during Angel One login: {e}")
+        print(f"❌ Error during Angel One login: {e}", flush=True)
         return False
 
     stocks_to_update = []
-    print("Scanning data table for existing stocks...")
+    print("Scanning data table for existing stocks...", flush=True)
     try:
         if TEST_MODE:
-            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.")
+            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.", flush=True)
             unique_stocks_map = {}
             scan_kwargs = {}
             while len(unique_stocks_map) < TEST_STOCK_LIMIT:
@@ -107,7 +107,7 @@ def run_daily_data_update():
                     break
             stocks_to_update = [{'token': token, 'symbol': symbol} for token, symbol in unique_stocks_map.items()]
         else:
-            print("Scanning for all unique stock tokens...")
+            print("Scanning for all unique stock tokens...", flush=True)
             all_items = []
             scan_kwargs = {'ProjectionExpression': 'instrument_token, symbol'}
             response = data_table.scan(**scan_kwargs)
@@ -126,23 +126,23 @@ def run_daily_data_update():
                         processed_tokens.add(token)
         
         if not stocks_to_update:
-            print("⚠️ No stocks found in DB to update.")
+            print("⚠️ No stocks found in DB to update.", flush=True)
             return False
-        print(f"✅ Found {len(stocks_to_update)} unique stocks to update.")
+        print(f"✅ Found {len(stocks_to_update)} unique stocks to update.", flush=True)
 
     except Exception as e:
-        print(f"❌ Error scanning DynamoDB for stocks: {e}")
+        print(f"❌ Error scanning DynamoDB for stocks: {e}", flush=True)
         return False
 
     latest_trading_day = None
-    print("Finding the most recent trading day...")
+    print("Finding the most recent trading day...", flush=True)
 
     test_stocks = stocks_to_update[:5]
-    print(f"  -> DEBUG: Will attempt to find date using up to {len(test_stocks)} stocks: {[s['symbol'] for s in test_stocks]}")
+    print(f"  -> DEBUG: Will attempt to find date using up to {len(test_stocks)} stocks: {[s['symbol'] for s in test_stocks]}", flush=True)
 
     # --- MODIFIED: More robust date-finding logic based on wider date range query ---
     for test_stock in test_stocks:
-        print(f"\n--- Attempting with test stock: {test_stock['symbol']} ---")
+        print(f"\n--- Attempting with test stock: {test_stock['symbol']} ---", flush=True)
         try:
             # We check a wide range (15 days) as the API is more reliable with this.
             to_date_check = datetime.now()
@@ -156,37 +156,37 @@ def run_daily_data_update():
                 "todate": f"{to_date_check.strftime('%Y-%m-%d')} 15:30"
             }
             
-            print(f"  -> DEBUG: API Request Params: {hist_params}")
+            print(f"  -> DEBUG: API Request Params: {hist_params}", flush=True)
             api_response = smartApi.getCandleData(hist_params)
-            print(f"  -> DEBUG: API Response: {api_response}")
+            print(f"  -> DEBUG: API Response: {api_response}", flush=True)
 
             if api_response and api_response.get('status') and api_response.get('data'):
                 # The last candle in the response is the latest trading day
                 last_candle_str = api_response['data'][-1][0]
                 latest_trading_day = datetime.strptime(last_candle_str.split('T')[0], '%Y-%m-%d')
-                print(f"✅ Success! Latest trading day is {latest_trading_day.strftime('%Y-%m-%d')} (found using {test_stock['symbol']})")
+                print(f"✅ Success! Latest trading day is {latest_trading_day.strftime('%Y-%m-%d')} (found using {test_stock['symbol']})", flush=True)
                 break # Exit the loop once we've found the date
             else:
-                print(f"  -> INFO: No data returned for {test_stock['symbol']}, trying next stock.")
+                print(f"  -> INFO: No data returned for {test_stock['symbol']}, trying next stock.", flush=True)
             
             time.sleep(0.4)
 
         except Exception as e:
-            print(f"  -> DEBUG: An exception occurred during API call for {test_stock['symbol']}: {e}")
+            print(f"  -> DEBUG: An exception occurred during API call for {test_stock['symbol']}: {e}", flush=True)
             continue # Try the next stock
     
     if not latest_trading_day:
-        print("❌ Could not determine latest trading day after trying all test stocks.")
+        print("❌ Could not determine latest trading day after trying all test stocks.", flush=True)
         return False
 
     from_date = latest_trading_day.strftime('%Y-%m-%d 09:15')
     to_date = latest_trading_day.strftime('%Y-%m-%d 15:30')
     date_checked = latest_trading_day.strftime('%Y-%m-%d')
-    print(f"\nFetching all stock data for the confirmed latest trading day: {date_checked}...")
+    print(f"\nFetching all stock data for the confirmed latest trading day: {date_checked}...", flush=True)
     
     with data_table.batch_writer() as batch:
         for index, stock in enumerate(stocks_to_update):
-            print(f"  -> [{index + 1}/{len(stocks_to_update)}] Fetching {stock['symbol']}...")
+            print(f"  -> [{index + 1}/{len(stocks_to_update)}] Fetching {stock['symbol']}...", flush=True)
             try:
                 # Now we query for the single specific day we found
                 hist_params = {"exchange": "NSE", "symboltoken": str(stock['token']), "interval": "ONE_DAY", "fromdate": from_date, "todate": to_date}
@@ -201,9 +201,9 @@ def run_daily_data_update():
                     })
                 time.sleep(0.4)
             except Exception as e:
-                print(f"     -> ERROR for {stock['symbol']}: {e}")
+                print(f"     -> ERROR for {stock['symbol']}: {e}", flush=True)
     
-    print("✅ Daily data update complete!")
+    print("✅ Daily data update complete!", flush=True)
     return True
 
 # ==============================================================================
@@ -216,7 +216,7 @@ def _format_result_eod(latest, previous):
 # (Note: Functions are collapsed for brevity)
 def run_screener_near_ath(all_tokens):
     screener_id = 'near_ath'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -235,7 +235,7 @@ def run_screener_recent_ipos(all_tokens): return 'recent_ipos', []
 
 def run_screener_above_200_sma(all_tokens):
     screener_id = 'above_200_sma'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -254,7 +254,7 @@ def run_screener_above_200_sma(all_tokens):
 
 def run_screener_multi_year_breakout(all_tokens):
     screener_id = 'multi_year_breakout'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -272,7 +272,7 @@ def run_screener_multi_year_breakout(all_tokens):
 
 def run_screener_monthly_high_breakout(all_tokens):
     screener_id = 'monthly_high_breakout'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     today = date.today()
     first_day_of_current_month = today.replace(day=1)
@@ -297,7 +297,7 @@ def run_screener_monthly_high_breakout(all_tokens):
 
 def run_screener_five_pct_breakout(all_tokens):
     screener_id = 'five_pct_breakout'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -312,7 +312,7 @@ def run_screener_five_pct_breakout(all_tokens):
 
 def run_screener_monthly_inside_candle(all_tokens):
     screener_id = 'monthly_inside_candle'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     today = date.today()
     first_day_current_month = today.replace(day=1)
@@ -340,7 +340,7 @@ def run_screener_monthly_inside_candle(all_tokens):
 
 def run_screener_tight_weekly_base(all_tokens):
     screener_id = 'tight_weekly_base'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -363,7 +363,7 @@ def run_screener_tight_weekly_base(all_tokens):
 
 def run_screener_tight_daily_base(all_tokens):
     screener_id = 'tight_daily_base'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -378,7 +378,7 @@ def run_screener_tight_daily_base(all_tokens):
 
 def run_screener_low_of_highest_up_candle(all_tokens):
     screener_id = 'low_of_highest_up_candle'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -397,7 +397,7 @@ def run_screener_low_of_highest_up_candle(all_tokens):
 
 def run_screener_low_of_high_volume_candle(all_tokens):
     screener_id = 'low_of_high_volume_candle'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -415,7 +415,7 @@ def run_screener_low_of_high_volume_candle(all_tokens):
 
 def run_screener_low_of_3_pct_down_candle(all_tokens):
     screener_id = 'low_of_3_pct_down_candle'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -436,7 +436,7 @@ def run_screener_low_of_3_pct_down_candle(all_tokens):
 
 def run_screener_above_10_sma(all_tokens):
     screener_id = 'above_10_sma'
-    print(f"--- Running Screener: {screener_id} ---")
+    print(f"--- Running Screener: {screener_id} ---", flush=True)
     final_results = []
     for token in all_tokens:
         try:
@@ -455,11 +455,11 @@ def run_screener_above_10_sma(all_tokens):
     return screener_id, final_results
 
 def run_all_eod_screeners():
-    print("\nStarting all end-of-day screener analyses...")
+    print("\nStarting all end-of-day screener analyses...", flush=True)
     try:
         all_tokens = set()
         if TEST_MODE:
-            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.")
+            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.", flush=True)
             scan_kwargs = {}
             while len(all_tokens) < TEST_STOCK_LIMIT:
                 response = data_table.scan(ProjectionExpression='instrument_token', **scan_kwargs)
@@ -475,7 +475,7 @@ def run_all_eod_screeners():
                 else:
                     break
         else: # Full Scan
-            print("Scanning for all unique stock tokens...")
+            print("Scanning for all unique stock tokens...", flush=True)
             scan_kwargs = {'ProjectionExpression': 'instrument_token'}
             response = data_table.scan(**scan_kwargs)
             all_items = response.get('Items', [])
@@ -485,7 +485,7 @@ def run_all_eod_screeners():
                 all_items.extend(response.get('Items', []))
             all_tokens = {int(item['instrument_token']) for item in all_items}
 
-        print(f"Found {len(all_tokens)} unique stocks to analyze.")
+        print(f"Found {len(all_tokens)} unique stocks to analyze.", flush=True)
 
         eod_screener_functions = [
             run_screener_near_ath, run_screener_recent_ipos, run_screener_above_200_sma,
@@ -500,17 +500,17 @@ def run_all_eod_screeners():
             for func in eod_screener_functions:
                 screener_id, results = func(all_tokens)
                 if results is not None:
-                    print(f"  -> {screener_id} found {len(results)} matching stocks.")
+                    print(f"  -> {screener_id} found {len(results)} matching stocks.", flush=True)
                     batch.put_item(Item={
                         'screener_name': screener_id,
                         'results': results,
                         'last_updated': datetime.now().isoformat()
                     })
         
-        print("\n✅ All EOD screeners finished and results saved.")
+        print("\n✅ All EOD screeners finished and results saved.", flush=True)
         return True
     except Exception as e:
-        print(f"❌ An error occurred during the main EOD screener run: {e}")
+        print(f"❌ An error occurred during the main EOD screener run: {e}", flush=True)
         return False
 
 # ==============================================================================
@@ -525,28 +525,28 @@ def _format_result_intraday(symbol, candle_5min):
     }
 
 def run_intraday_screeners():
-    print("\nStarting INTRADAY screener analysis...")
+    print("\nStarting INTRADAY screener analysis...", flush=True)
     if not intraday_task_lock.acquire(blocking=False):
-        print("An intraday task is already running. Skipping.")
+        print("An intraday task is already running. Skipping.", flush=True)
         return
 
     try:
         # --- Authenticate with Angel One ---
-        print("Connecting to Angel One SmartAPI for intraday data...")
+        print("Connecting to Angel One SmartAPI for intraday data...", flush=True)
         try:
             totp = pyotp.TOTP(TOTP_SECRET).now()
             session_data = smartApi.generateSession(CLIENT_CODE, MPIN, totp)
             if not session_data['status']:
-                print(f"❌ Angel One Login Failed: {session_data['message']}")
+                print(f"❌ Angel One Login Failed: {session_data['message']}", flush=True)
                 return
-            print("✅ Angel One session created successfully.")
+            print("✅ Angel One session created successfully.", flush=True)
         except Exception as e:
-            print(f"❌ Error during Angel One login: {e}")
+            print(f"❌ Error during Angel One login: {e}", flush=True)
             return
 
         all_stocks = []
         if TEST_MODE:
-            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.")
+            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.", flush=True)
             unique_stocks_map = {}
             scan_kwargs = {}
             while len(unique_stocks_map) < TEST_STOCK_LIMIT:
@@ -566,7 +566,7 @@ def run_intraday_screeners():
                     break
             all_stocks = [{'token': token, 'symbol': symbol} for token, symbol in unique_stocks_map.items()]
         else: # Full scan
-            print("Scanning for all unique stock tokens...")
+            print("Scanning for all unique stock tokens...", flush=True)
             scan_kwargs = {'ProjectionExpression': 'instrument_token, symbol'}
             response = data_table.scan(**scan_kwargs)
             all_items = response.get('Items', [])
@@ -583,7 +583,7 @@ def run_intraday_screeners():
                         unique_stocks_map[token] = item['symbol']
             all_stocks = [{'token': token, 'symbol': symbol} for token, symbol in unique_stocks_map.items()]
 
-        print(f"Found {len(all_stocks)} unique stocks to analyze for intraday screeners.")
+        print(f"Found {len(all_stocks)} unique stocks to analyze for intraday screeners.", flush=True)
 
         # --- Initialize results lists ---
         open_low_results = []
@@ -597,7 +597,7 @@ def run_intraday_screeners():
 
         # --- Loop through stocks and perform checks ---
         for index, stock in enumerate(all_stocks):
-            print(f"  -> [{index + 1}/{len(all_stocks)}] Analyzing {stock['symbol']}...")
+            print(f"  -> [{index + 1}/{len(all_stocks)}] Analyzing {stock['symbol']}...", flush=True)
             try:
                 # 1. Fetch the first 5-minute candle of the day
                 hist_params = {"exchange": "NSE", "symboltoken": str(stock['token']), "interval": "FIVE_MINUTE", "fromdate": from_date, "todate": to_date}
@@ -635,16 +635,16 @@ def run_intraday_screeners():
                 time.sleep(0.4) # API rate limit
 
             except Exception as e:
-                print(f"     -> ERROR for {stock['symbol']}: {e}")
+                print(f"     -> ERROR for {stock['symbol']}: {e}", flush=True)
                 continue
         
         # --- Save results to DynamoDB ---
-        print("Saving intraday screener results...")
+        print("Saving intraday screener results...", flush=True)
         with results_table.batch_writer() as batch:
             batch.put_item(Item={'screener_name': 'intraday_open_low', 'results': open_low_results, 'last_updated': datetime.now().isoformat()})
             batch.put_item(Item={'screener_name': 'intraday_open_high', 'results': open_high_results, 'last_updated': datetime.now().isoformat()})
             batch.put_item(Item={'screener_name': 'intraday_orh_breakout', 'results': orh_breakout_results, 'last_updated': datetime.now().isoformat()})
-        print("✅ Intraday screeners finished and results saved.")
+        print("✅ Intraday screeners finished and results saved.", flush=True)
 
     finally:
         intraday_task_lock.release()
@@ -658,7 +658,7 @@ def get_screener_results(screener_id):
     if not screener_id:
         return jsonify({"error": "Screener ID is required"}), 400
     
-    print(f"API request received for screener: {screener_id}")
+    print(f"API request received for screener: {screener_id}", flush=True)
     try:
         response = results_table.get_item(Key={'screener_name': screener_id})
         item = response.get('Item')
@@ -671,7 +671,7 @@ def get_screener_results(screener_id):
         else:
             return jsonify({'screener_name': screener_id, 'results': [], 'last_updated': datetime.now().isoformat()}), 200
     except Exception as e:
-        print(f"API Error for {screener_id}: {e}")
+        print(f"API Error for {screener_id}: {e}", flush=True)
         return jsonify({"error": "An internal server error occurred"}), 500
 
 # ==============================================================================
@@ -679,18 +679,18 @@ def get_screener_results(screener_id):
 # ==============================================================================
 def run_eod_tasks():
     if not eod_task_lock.acquire(blocking=False):
-        print("An EOD task is already running. Skipping this trigger.")
+        print("An EOD task is already running. Skipping this trigger.", flush=True)
         return
     try:
-        print("="*50)
-        print(f"Starting scheduled EOD tasks at {datetime.now()}")
-        print("="*50)
+        print("="*50, flush=True)
+        print(f"Starting scheduled EOD tasks at {datetime.now()}", flush=True)
+        print("="*50, flush=True)
         update_success = run_daily_data_update()
         if update_success:
             run_all_eod_screeners()
         else:
-            print("Skipping EOD screener analysis due to data update failure.")
-        print("\nAll scheduled EOD tasks finished.")
+            print("Skipping EOD screener analysis due to data update failure.", flush=True)
+        print("\nAll scheduled EOD tasks finished.", flush=True)
     finally:
         eod_task_lock.release()
 
@@ -710,5 +710,10 @@ def trigger_intraday_tasks():
     task_thread.start()
     return jsonify({"status": "Intraday tasks triggered successfully in the background."}), 202
 
-# The if __name__ == '__main__': block has been removed for deployment.
-# The server will be started by Gunicorn.
+if __name__ == '__main__':
+    print("Starting the main application...", flush=True)
+    print("Triggering initial EOD data update and screener analysis in the background...", flush=True)
+    initial_eod_thread = threading.Thread(target=run_eod_tasks)
+    initial_eod_thread.start()
+    app.run(host='0.0.0.0', port=5000)
+
