@@ -1,1129 +1,714 @@
-import os
-import sys
-import json
-import re
-import time
-from datetime import datetime, time as dt_time, timedelta, date
-from dateutil.relativedelta import relativedelta, TH
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import math
-import requests
+# This single script combines the daily data update, screener analysis, and API server.
+
+import boto3
 import pandas as pd
-import socket
-
-# --- CHANGE: Upgraded Google Authentication Library ---
-# The old 'oauth2client' is deprecated. This is the modern, official library.
-from google.oauth2.service_account import Credentials
-import gspread
-
-# --- NEW: Angel One SmartAPI Imports ---
-from SmartApi import SmartConnect
 import pyotp
-
-# --- NEW: Yahoo Finance Import ---
-import yfinance as yf
-
-# --- START: IMPORTS FOR 24/7 SCHEDULER ---
-from flask import Flask
+import sys
+import time
+import json
+from decimal import Decimal
+from datetime import datetime, timedelta, date
+from dateutil.relativedelta import relativedelta
+from boto3.dynamodb.conditions import Key
+from SmartApi import SmartConnect
+from flask import Flask, jsonify
+from flask_cors import CORS
 import threading
-import schedule
-from zoneinfo import ZoneInfo
-# --- END: IMPORTS FOR 24/7 SCHEDULER ---
-
-print("="*60, flush=True)
-print("--- [RENDER-DEBUG] Script execution started (Top Level) ---", flush=True)
-print(f"--- Timestamp: {datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')} ---", flush=True)
-print("="*60, flush=True)
-
 
 # ==============================================================================
-# --- GLOBAL CONFIGURATION AND CREDENTIALS ---
+# --- 1. UNIFIED CONFIGURATION ---
 # ==============================================================================
+AWS_REGION = "ap-south-1"
+DATA_TABLE_NAME = "daily_stock_data"
+RESULTS_TABLE_NAME = "screener_results"
 
-# --- Google Sheets Configuration ---
-GOOGLE_SHEET_ID = "1cYBpsVKCbrYCZzrj8NAMEgUG4cXy5Q5r9BtQE1Cjmz0"
-ATH_CACHE_SHEET_NAME = "ATH Cache"
-
-# --- Angel One SmartAPI Credentials ---
-# IMPORTANT: These are placeholders from your example. Ensure they are correct.
+# Angel One API Credentials
 API_KEY = "oNNHQHKU"
 CLIENT_CODE = "D355432"
 MPIN = "1234"
 TOTP_SECRET = "QHO5IWOISV56Z2BFTPFSRSQVRQ"
 
-# --- Angel One Configuration ---
-INSTRUMENT_LIST_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-API_REQUEST_DELAY = 0.4 # Delay between successful API calls to respect rate limits
+# --- Development Settings ---
+TEST_MODE = True
+TEST_STOCK_LIMIT = 200
 
-# --- Global Objects (Initialized at runtime) ---
-smart_api_obj = None
-instrument_master_list = []
-instrument_token_map = {} # Cache for symbol -> token mapping
+# ==============================================================================
+# --- 2. INITIALIZATION ---
+# ==============================================================================
 
-# --- List of symbols to exclude from all scans ---
-SYMBOLS_TO_EXCLUDE = {
-    # This extensive list is preserved from your original script.
-    "ABSLNN50ET", "AONENIFTY", "AXISCETF", "AXISNIFTY", "BBNPNBETF", "BSE500IETF", "BSLNIFTY", "EQUAL200",
-    "GROWWNIFTY", "GROWWN200", "HDFCBSE500", "HDFCGROWTH", "HDFCMID150", "HDFCNIF100", "HDFCNIFTY",
-    "HDFCNEXT50", "HDFCSML250", "ICICIB22", "IDFNIFTYET", "IVZINNIFTY", "JUNIORBEES", "LICNETFN50",
-    "LICNMID100", "MASPTOP50", "MID150", "MID150BEES", "MID150CASE", "MIDCAP", "MIDCAPETF", "MIDSMALL",
-    "MON100", "MONEXT50", "MONIFTY500", "MOSMALL250", "NEXT50", "NEXT50IETF", "NIF100BEES", "NIF100IETF",
-    "NIFTY1", "NIFTY100EW", "NIFTY50ADD", "NIFTYBEES", "NIFTYBETF", "NIFTYETF", "NIFTYIETF", "QNIFTY",
-    "SETFNIF50", "SETFNN50", "SMALLCAP", "SNXT30BEES", "TOP100CASE", "TOP15IETF", "UTINIFTETF", "UTINEXT50",
-    "UTISXN50", "ABSLPSE", "AUTOBEES", "AUTOIETF", "AXISBNKETF", "AXISHCETF", "AXISTECETF", "SBINEQWETF",
-    "BANKBEES", "BANKBETF", "NIFMID150", "BANKETF", "BANKETFADD", "BANKIETF", "BFSI", "CONSUMBEES",
-    "CONSUMER", "CONSUMIETF", "CPSEETF", "ESG", "FINIETF", "FMCGIETF", "GROWWDEFNC", "HDFCPSUBK",
-    "HDFCPVTBAN", "HEALTHADD", "HEALTHIETF", "BANKPSU", "INFRAIETF", "INFRABEES", "IT", "ITBEES", "ITETF",
-    "ITETFADD", "ITIETF", "MAKEINDIA", "METAL", "METALIETF", "MIDSELIETF", "MNC", "MOINFRA", "MOPSE",
-    "NIFITETF", "OILIETF", "PHARMABEES", "PSUBANK", "PSUBANKADD", "PSUBANKIETF", "PSUBNKBEES", "PSUBNKIETF",
-    "PVTBANIETF", "PVTBANKADD", "SBIETFIT", "SENSEXADD", "SETFNIFBK", "SHARIABEES", "TECH", "UTIBANKETF",
-    "AXISGOLD", "AXISILVER", "BBNPPGOLD", "BSLGOLDETF", "EGOLD", "ESILVER", "GOLD1", "GOLDBEES", "GOLDCASE",
-    "GOLDETF", "GOLDETFADD", "GOLDIETF", "GOLDSHARE", "GOLDTECH", "GROWWGOLD", "GROWWSLVR", "HDFCGOLD",
-    "HDFCSILVER", "IVZINGOLD", "LICMFGOLD", "MOGOLD", "QGOLDHALF", "SBISILVER", "SETFGOLD", "SILVER",
-    "SILVER1", "SILVERADD", "SILVERBEES", "SILVERCASE", "SILVERETF", "SILVERIETF", "SILVRETF", "TATSILV",
-    "UNIONGOLD", "AXISBPSETF", "EBBETF0430", "EBBETF0431", "EBBETF0432", "EBBETF0433", "GILT5YBEES",
-    "GSEC10ABSL", "GSEC10IETF", "GSEC10YEAR", "GSEC5IETF", "LICNETFGSC", "LTGILTBEES", "NIF10GETF",
-    "PNBGILTS", "SDL26BEES", "SETF10GILT", "ALPHA", "ALPHAETF", "ALPL30IETF", "DIVOPPBEES", "EQUAL50",
-    "EQUAL50ADD", "HDFCLOWVOL", "HDFCQUAL", "HDFCVALUE", "LOWVOL", "LOWVOL1", "LOWVOLIETF", "MOM100",
-    "MOM30IETF", "MOM50", "MOMENTUM", "MOMENTUM50", "MOMIDMTM", "MON50EQUAL", "MOALPHA50", "MOLOWVOL",
-    "MOQUALITY", "MOVALUE", "MULTICAP", "NIFTYQLITY", "NV20", "NV20BEES", "NV20IETF", "QUAL30IETF",
-    "QUALITY30", "SBIETFQLTY", "SBIETFEQW", "VAL30IETF", "ABSLLIQUID", "AONELIQUID", "CASHIETF",
-    "GROWWLIQID", "HDFCLIQUID", "LIQGRWBEES", "LIQUID", "LIQUID1", "LIQUIDADD", "LIQUIDBEES", "LIQUIDBETF",
-    "LIQUIDCASE", "LIQUIDETF", "LIQUIDIETF", "LIQUIDPLUS", "LIQUIDSBI", "LIQUIDSHRI", "HDFCSENSEX",
-    "SENSEXETF", "UTISENSETF", "BSLSENETFG", "SENSEXIETF", "AXSENSEX", "NIFTY GROWSECT 15", "NIFTY50 PR 2X LEV",
-    "NIFTY 500", "NIFTY IT", "NIFTY BANK", "NIFTY MIDCAP 100", "NIFTY 100", "NIFTY NEXT 50", "NIFTY MIDCAP 50",
-    "HANGSENG BEES-NAV", "INDIA VIX", "NIFTY REALTY", "NIFTY INFRA", "NIFTY ENERGY", "NIFTY FMCG", "NIFTY MNC",
-    "NIFTY PHARMA", "NIFTY PSE", "NIFTY PSU BANK", "NIFTY SERV SECTOR", "NIFTY AUTO", "NIFTY METAL",
-    "NIFTY MEDIA", "NIFTY SMLCAP 100", "NIFTY 200", "NIFTY DIV OPPS 50", "NIFTY COMMODITIES", "NIFTY CONSUMPTION",
-    "NIFTY FIN SERVICE", "NIFTY50 DIV POINT", "NIFTY100 LIQ 15", "NIFTY CPSE", "NIFTY50 PR 1X INV",
-    "NIFTY50 TR 2X LEV", "NIFTY50 TR 1X INV", "NIFTY50 VALUE 20", "NIFTY MID LIQ 15", "NIFTY PVT BANK",
-    "NIFTY100 QUALTY30", "NIFTY GS 8 13YR", "NIFTY GS 10YR", "NIFTY GS 10YR CLN", "NIFTY GS 4 8YR",
-    "NIFTY GS 11 15YR", "NIFTY GS 15YRPLUS", "NIFTY GS COMPSITE", "NIFTY50 EQL WGT", "NIFTY100 EQL WGT",
-    "NIFTY100 LOWVOL30", "NIFTY ALPHA 50", "NIFTY MIDCAP 150", "NIFTY SMLCAP 50", "NIFTY SMLCAP 250",
-    "NIFTY MIDSML 400", "NIFTY200 QUALTY30", "NIFTY MID SELECT", "SENSEX", "BSEPSU", "BSE100", "BSE200",
-    "BSE500", "BSE IT", "BSEFMC", "BSE CG", "BSE CD", "BSE HC", "TECK", "BANKEX", "AUTO", "CPSE", "SMLCAP",
-    "DOL30", "DOL100", "DOL200", "LRGCAP", "MIDSEL", "SMLSEL", "OILGAS", "POWER", "REALTY", "BSEIPO", "CARBON",
-    "SMEIPO", "INFRA", "GREENX", "SNSX50", "SNXT50", "ENERGY", "FINSER", "INDSTR", "TELCOM", "LMI250",
-    "MSL400", "MCXCRUDEX", "MCXCOPRDEX", "MCXSILVDEX", "MCXGOLDEX", "MCXMETLDEX", "MCXBULLDEX", "MCXCOMPDEX",
-    "MFGLOBALCI", "MCXSAGRI", "MCXSENERGY", "MCXSMETAL", "MCXSCOMDEX", "MCXCOMPOSITE", "MCXCOMDEX", "MCXAGRI",
-    "MCXENERGY", "MCXMETAL", "AGRIDEX", "NKRISHI", "FREIGHTEX", "NCDEXRAIN", "NCDEXAGRI", "FUTEXAGRI",
-    "081NSETEST", "151NSETEST", "111NSETEST", "061NSETEST", "181NSETEST", "051NSETEST", "121NSETEST",
-    "11NSETEST", "041NSETEST", "G1NSETEST", "131NSETEST", "171NSETEST", "021NSETEST", "031NSETEST",
-    "011NSETEST", "071NSETEST", "101NSETEST", "091NSETEST", "141NSETEST", "V1NSETEST", "161NSETEST",
-    "N1NSETEST", "HDFCNIFIT", "LICNETFSEN", "EBANKNIFTY", "MOMGF", "MOMSEC", "NIF5GETF", "NEXT30ADD", "NETF", "NPBET",
-    "MIDCAPIETF", "SELECTIPO", "ABGSEC", "MIDQ50ADD", "AONETOTAL", "MOHEALTH", "HEALTHY", "SBIETFCON",
-    "COMMOIETF", "GROWWMOM50", "LICNFNHGP", "TNIDETF", "MOGSEC", "HNGSNGBEES", "TOP10ADD", "MONQ50"
-}
-
-# Determine the path for the service account JSON key file
-if os.path.exists("/etc/secrets/creds.json"):
-    JSON_KEY_FILE_PATH = "/etc/secrets/creds.json"
-    print("[RENDER-DEBUG] Using production credential path: /etc/secrets/creds.json", flush=True)
-else:
-    # Fallback for local development. Assumes the key file is in the same directory.
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    JSON_KEY_FILE_PATH = os.path.join(current_dir, "the-money-method-ad6d7-6d23c192b74e.json")
-    print(f"[RENDER-DEBUG] Using local development credential path: {JSON_KEY_FILE_PATH}", flush=True)
-
-
-# Define the necessary OAuth2 scopes for Google Sheets and Drive access
-SCOPE = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-
-# --- START: FLASK WEB SERVICE SETUP ---
 app = Flask(__name__)
-print("[RENDER-DEBUG] Flask app object created.", flush=True)
+CORS(app)
 
-@app.route('/ping')
-def ping():
-    """A health-check endpoint for UptimeRobot."""
-    return "The scanner service is alive.", 200
-# --- END: FLASK WEB SERVICE SETUP ---
+print("Connecting to AWS DynamoDB...")
+try:
+    dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+    data_table = dynamodb.Table(DATA_TABLE_NAME)
+    results_table = dynamodb.Table(RESULTS_TABLE_NAME)
+    data_table.load()
+    results_table.load()
+    print("✅ Successfully connected to both DynamoDB tables.")
+except Exception as e:
+    print(f"❌ Could not connect to DynamoDB. Error: {e}")
+    sys.exit()
 
+smartApi = SmartConnect(API_KEY)
+
+# Locks to prevent concurrent task runs
+eod_task_lock = threading.Lock()
+intraday_task_lock = threading.Lock()
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super(DecimalEncoder, self).default(obj)
 
 # ==============================================================================
-# --- ANGEL ONE API AND UTILITY FUNCTIONS ---
+# --- 3. END-OF-DAY DATA UPDATE LOGIC ---
 # ==============================================================================
-
-def initialize_services():
-    """Connects to Google Sheets and Angel One SmartAPI."""
-    global gsheet, cache_sheet, stock_sheet, smart_api_obj
-    print("[DEBUG] Initializing services...", flush=True)
-
-    # --- SET GLOBAL TIMEOUT FOR ALL NETWORK OPERATIONS ---
-    # This is critical for Render's environment to prevent hangs.
-    print("[RENDER-DEBUG] Setting global socket timeout to 30 seconds...", flush=True)
-    socket.setdefaulttimeout(30)
-    print("[RENDER-DEBUG] Global socket timeout set.", flush=True)
-
-    # --- Connect to Google Sheets ---
+def run_daily_data_update():
+    print("\nStarting daily data update process...")
     try:
-        print("[RENDER-DEBUG] 1. Preparing to create Google credentials object using the MODERN library...", flush=True)
-        creds = Credentials.from_service_account_file(JSON_KEY_FILE_PATH, scopes=SCOPE)
-        
-        print("[RENDER-DEBUG] 2. Credentials object created. Preparing to authorize...", flush=True)
-        client = gspread.authorize(creds)
-        
-        print("[RENDER-DEBUG] 3. Authorization successful. Preparing to open sheet...", flush=True)
-        
-        print(f"[RENDER-DEBUG] 3a. Attempting to open sheet with ID: {GOOGLE_SHEET_ID}...", flush=True)
-        gsheet = client.open_by_key(GOOGLE_SHEET_ID)
-        print("[RENDER-DEBUG] 3b. Successfully opened sheet object by key.", flush=True)
-        
-        stock_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
-        cache_sheet = gsheet.worksheet(ATH_CACHE_SHEET_NAME)
-        print("[RENDER-DEBUG] 3c. Successfully accessed worksheet.", flush=True)
-
-        print("✅ Successfully connected to Google Sheets.", flush=True)
-    except Exception as e:
-        print(f"❌ Error connecting to Google Sheets: {e}", flush=True)
-        import traceback
-        print("--- Full Traceback ---", flush=True)
-        traceback.print_exc(file=sys.stdout)
-        print("----------------------", flush=True)
-        sys.exit()
-
-    # --- Authenticate with Angel One ---
-    try:
-        # --- DEBUGGING STEP 1 ---
-        print("🔐 Authenticating with Angel One SmartAPI...", flush=True)
-        print("   [ANGEL-DEBUG] Step 1: Creating SmartConnect object...", flush=True)
-        smart_api_obj = SmartConnect(api_key=API_KEY)
-        print("   [ANGEL-DEBUG] Step 1: SmartConnect object created successfully.", flush=True)
-
-        # --- DEBUGGING STEP 2 ---
-        print("   [ANGEL-DEBUG] Step 2: Generating TOTP...", flush=True)
+        print("Connecting to Angel One SmartAPI...")
         totp = pyotp.TOTP(TOTP_SECRET).now()
-        print(f"   [ANGEL-DEBUG] Step 2: TOTP generated: {totp}", flush=True)
-
-        # --- DEBUGGING STEP 3 ---
-        print(f"   [ANGEL-DEBUG] Step 3: Calling generateSession for client code {CLIENT_CODE}...", flush=True)
-        data = smart_api_obj.generateSession(CLIENT_CODE, MPIN, totp)
-        print(f"   [ANGEL-DEBUG] Step 3: Raw response from generateSession: {data}", flush=True)
-
-        # --- DEBUGGING STEP 4 ---
-        print("   [ANGEL-DEBUG] Step 4: Validating the session response...", flush=True)
-        if data and data.get('status') and data.get('data', {}).get('jwtToken'):
-            print("   [ANGEL-DEBUG] Step 4: Validation successful. JWT Token found.", flush=True)
-            print("✅ Angel One session generated successfully!", flush=True)
+        session_data = smartApi.generateSession(CLIENT_CODE, MPIN, totp)
+        if not session_data['status']:
+            print(f"❌ Angel One Login Failed: {session_data['message']}")
+            return False
         else:
-            print("   [ANGEL-DEBUG] Step 4: Validation FAILED. Response was invalid or did not contain a JWT Token.", flush=True)
-            error_message = data.get('message', 'No specific error message returned from API.')
-            print(f"   [ANGEL-DEBUG] API Error Message: {error_message}", flush=True)
-            raise Exception(f"Authentication failed. Full Response: {data}")
-
+            print("✅ Angel One session created successfully.")
     except Exception as e:
-        print(f"❌ An exception occurred during Angel One session generation: {e}", flush=True)
-        import traceback
-        print("--- Full Traceback ---", flush=True)
-        traceback.print_exc(file=sys.stdout)
-        print("----------------------", flush=True)
-        sys.exit()
+        print(f"❌ Error during Angel One login: {e}")
+        return False
 
-    # --- Download Instrument Master List ---
+    stocks_to_update = []
+    print("Scanning data table for existing stocks...")
     try:
-        global instrument_master_list, instrument_token_map
-        print("📦 Downloading Angel One instrument master list...", flush=True)
-        response = requests.get(INSTRUMENT_LIST_URL)
-        response.raise_for_status()
-        instrument_master_list = response.json()
-        # Create a quick lookup map: (symbol, exchange_segment) -> token
-        for item in instrument_master_list:
-            key = (item.get('symbol', '').upper(), item.get('exch_seg', '').upper())
-            instrument_token_map[key] = item.get('token')
-        print(f"✅ Instrument list downloaded and processed. Found {len(instrument_master_list)} instruments.", flush=True)
-    except Exception as e:
-        print(f"❌ FATAL: Could not download or process the master instrument list: {e}. Exiting.", flush=True)
-        sys.exit()
-    print("[DEBUG] Services initialized successfully.", flush=True)
+        if TEST_MODE:
+            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.")
+            unique_stocks_map = {}
+            scan_kwargs = {}
+            while len(unique_stocks_map) < TEST_STOCK_LIMIT:
+                response = data_table.scan(ProjectionExpression='instrument_token, symbol', **scan_kwargs)
+                items = response.get('Items', [])
+                if not items: break
 
-def get_token_for_symbol(symbol, exchange):
-    """
-    Finds the Angel One instrument token for a given symbol and exchange.
-    Uses the pre-loaded instrument_token_map for fast lookups.
-    """
-    # Normalize inputs
-    symbol_clean = symbol.strip().upper().replace("-EQ", "").replace("-BE", "")
-    exchange_clean = exchange.strip().upper()
-
-    # Map our 'NSE'/'BSE' to Angel One's 'exch_seg'
-    if exchange_clean == 'NSE':
-        key_eq = (f"{symbol_clean}-EQ", "NSE")
-        key_be = (f"{symbol_clean}-BE", "NSE")
-        token = instrument_token_map.get(key_eq, instrument_token_map.get(key_be))
-        if token:
-            return token, "NSE"
-
-    elif exchange_clean == 'BSE':
-        key = (symbol_clean, "BSE")
-        token = instrument_token_map.get(key)
-        if token:
-            return token, "BSE"
-
-    # Fallback: Search for the base symbol in both exchanges if direct match fails
-    if instrument_token_map.get((f"{symbol_clean}-EQ", "NSE")): return instrument_token_map[(f"{symbol_clean}-EQ", "NSE")], "NSE"
-    if instrument_token_map.get((f"{symbol_clean}-BE", "NSE")): return instrument_token_map[(f"{symbol_clean}-BE", "NSE")], "NSE"
-    if instrument_token_map.get((symbol_clean, "BSE")): return instrument_token_map[(symbol_clean, "BSE")], "BSE"
-
-    return None, None
-
-
-def fetch_history_angelone(token, exchange, interval, from_date, to_date):
-    """
-    A robust wrapper for Angel One's getCandleData API with retry logic and enhanced debugging.
-    Returns a pandas DataFrame for compatibility with existing logic.
-    """
-    historic_param = {
-        "exchange": exchange,
-        "symboltoken": token,
-        "interval": interval,
-        "fromdate": from_date.strftime('%Y-%m-%d %H:%M'),
-        "todate": to_date.strftime('%Y-%m-%d %H:%M')
-    }
-    
-    max_retries = 1
-    retry_delay = 1.0 
-
-    for attempt in range(max_retries + 1): 
-        try:
-            time.sleep(API_REQUEST_DELAY)
-
-            if attempt > 0:
-                print(f"   [RETRY] Waiting {retry_delay}s before retrying token {token} (Attempt {attempt + 1}/{max_retries + 1})", flush=True)
-                time.sleep(retry_delay)
-
-            # print(f"[DEBUG] Requesting {interval} history for token {token}. Params: {historic_param}", flush=True)
-            response = smart_api_obj.getCandleData(historic_param)
-            
-            if response and response.get("status") and response.get("data"):
-                data = response["data"]
-                if not data:
-                    return pd.DataFrame()
-
-                df = pd.DataFrame(data, columns=['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
-                df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-                df['Timestamp'] = df['Timestamp'].dt.tz_localize(None)
-                df.set_index('Timestamp', inplace=True)
-                return df
-            else:
-                # print(f"   [WARN] Invalid or empty response for token {token}.", flush=True)
-                # print(f"   [DIAGNOSTIC] Raw server response: {response}", flush=True)
-                if attempt < max_retries:
-                    continue 
+                for item in items:
+                    if 'instrument_token' in item and 'symbol' in item:
+                        token = int(item['instrument_token'])
+                        if token not in unique_stocks_map:
+                            unique_stocks_map[token] = item['symbol']
+                            if len(unique_stocks_map) >= TEST_STOCK_LIMIT:
+                                break
+                
+                if 'LastEvaluatedKey' in response and len(unique_stocks_map) < TEST_STOCK_LIMIT:
+                    scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
                 else:
-                    break 
+                    break
+            stocks_to_update = [{'token': token, 'symbol': symbol} for token, symbol in unique_stocks_map.items()]
+        else:
+            print("Scanning for all unique stock tokens...")
+            all_items = []
+            scan_kwargs = {'ProjectionExpression': 'instrument_token, symbol'}
+            response = data_table.scan(**scan_kwargs)
+            all_items.extend(response.get('Items', []))
+            while 'LastEvaluatedKey' in response:
+                scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                response = data_table.scan(**scan_kwargs)
+                all_items.extend(response.get('Items', []))
+            
+            processed_tokens = set()
+            for item in all_items:
+                if 'instrument_token' in item and 'symbol' in item:
+                    token = int(item['instrument_token'])
+                    if token not in processed_tokens:
+                        stocks_to_update.append({'token': token, 'symbol': item['symbol']})
+                        processed_tokens.add(token)
+        
+        if not stocks_to_update:
+            print("⚠️ No stocks found in DB to update.")
+            return False
+        print(f"✅ Found {len(stocks_to_update)} unique stocks to update.")
+
+    except Exception as e:
+        print(f"❌ Error scanning DynamoDB for stocks: {e}")
+        return False
+
+    latest_trading_day = None
+    print("Finding the most recent trading day...")
+
+    test_stocks = stocks_to_update[:5]
+    print(f"  -> DEBUG: Will attempt to find date using up to {len(test_stocks)} stocks: {[s['symbol'] for s in test_stocks]}")
+
+    # --- MODIFIED: More robust date-finding logic based on wider date range query ---
+    for test_stock in test_stocks:
+        print(f"\n--- Attempting with test stock: {test_stock['symbol']} ---")
+        try:
+            # We check a wide range (15 days) as the API is more reliable with this.
+            to_date_check = datetime.now()
+            from_date_check = to_date_check - timedelta(days=15)
+            
+            hist_params = {
+                "exchange": "NSE", 
+                "symboltoken": str(test_stock['token']), 
+                "interval": "ONE_DAY", 
+                "fromdate": f"{from_date_check.strftime('%Y-%m-%d')} 09:15", 
+                "todate": f"{to_date_check.strftime('%Y-%m-%d')} 15:30"
+            }
+            
+            print(f"  -> DEBUG: API Request Params: {hist_params}")
+            api_response = smartApi.getCandleData(hist_params)
+            print(f"  -> DEBUG: API Response: {api_response}")
+
+            if api_response and api_response.get('status') and api_response.get('data'):
+                # The last candle in the response is the latest trading day
+                last_candle_str = api_response['data'][-1][0]
+                latest_trading_day = datetime.strptime(last_candle_str.split('T')[0], '%Y-%m-%d')
+                print(f"✅ Success! Latest trading day is {latest_trading_day.strftime('%Y-%m-%d')} (found using {test_stock['symbol']})")
+                break # Exit the loop once we've found the date
+            else:
+                print(f"  -> INFO: No data returned for {test_stock['symbol']}, trying next stock.")
+            
+            time.sleep(0.4)
 
         except Exception as e:
-            # print(f"   [ERROR] API call failed for token {token}: {e}", flush=True)
-            if attempt < max_retries:
-                continue 
-            else:
-                break 
-
-    # print(f"❌ All retries failed for token {token}. Skipping.", flush=True)
-    return pd.DataFrame()
-
-def fetch_history_for_ath_simple(token, exchange, interval, from_date, to_date):
-    """
-    A basic, non-retrying wrapper for the getCandleData API, for use by the ATH logic.
-    """
-    try:
-        historic_param = {
-            "exchange": exchange,
-            "symboltoken": token,
-            "interval": interval,
-            "fromdate": from_date.strftime('%Y-%m-%d %H:%M'),
-            "todate": to_date.strftime('%Y-%m-%d %H:%M')
-        }
-        # print(f"[DEBUG] (ATH) Requesting {interval} history for token {token}...", flush=True)
-        response = smart_api_obj.getCandleData(historic_param)
-        
-        if response and response.get("status") and response.get("data"):
-            data = response["data"]
-            if not data:
-                return pd.DataFrame()
-
-            df = pd.DataFrame(data, columns=['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
-            df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-            df['Timestamp'] = df['Timestamp'].dt.tz_localize(None)
-            df.set_index('Timestamp', inplace=True)
-            return df
-        else:
-            return pd.DataFrame()
-
-    except Exception as e:
-        print(f"❌ (ATH) API call failed for token {token}: {e}", flush=True)
-        return pd.DataFrame()
-
-
-def fetch_full_history_for_ath(token, exchange):
-    """
-    Dynamically fetches the complete historical data for a stock by making chunked 
-    API calls until no more data is returned.
-    """
-    all_data = []
-    end_date = datetime.now()
-    for i in range(6): 
-        start_date = end_date - relativedelta(years=5)
-        
-        if i == 0:
-            initial_check_df = fetch_history_for_ath_simple(token, exchange, "ONE_DAY", end_date - relativedelta(months=1), end_date)
-            if initial_check_df.empty:
-                # print(f"[DEBUG] No recent data for token {token}. Skipping ATH fetch.", flush=True)
-                return None
-
-        df_chunk = fetch_history_for_ath_simple(token, exchange, "ONE_DAY", start_date, end_date)
-        time.sleep(API_REQUEST_DELAY)
-
-        if not df_chunk.empty:
-            all_data.append(df_chunk)
-        else:
-            # print(f"[DEBUG]   Empty chunk for token {token}. Assuming end of history.", flush=True)
-            break 
-        end_date = start_date - timedelta(days=1)
-
-    if not all_data:
-        # print(f"[DEBUG] No historical data found for token {token}.", flush=True)
-        return None
-
-    full_df = pd.concat(all_data)
-    ath = full_df['High'].max()
-    # print(f"[DEBUG] Calculated ATH for token {token} is {ath} from {len(full_df)} candles.", flush=True)
-    return ath
-
-
-def get_fno_symbols():
-    """
-    Downloads the official list of F&O securities from the Angel Broking JSON file
-    and returns a set of symbols for quick lookup.
-    """
-    print("📦 Downloading F&O securities list from Angel Broking...", flush=True)
-    fno_url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    try:
-        # --- NEW DEBUGGING STEP ---
-        print(f"   [FNO-DEBUG] About to make GET request to: {fno_url}", flush=True)
-        response = requests.get(fno_url, headers=headers, timeout=20)
-        print(f"   [FNO-DEBUG] GET request completed. Status Code: {response.status_code}", flush=True)
-        response.raise_for_status()
-        print("   [FNO-DEBUG] Response status is OK. About to parse JSON...", flush=True)
-        data = response.json()
-        print("   [FNO-DEBUG] JSON parsed successfully.", flush=True)
-        
-        fno_symbols = {
-            item.get('name')
-            for item in data
-            if item.get('exch_seg') == 'NFO' and item.get('instrumenttype') == 'FUTSTK' and item.get('name')
-        }
-        
-        print(f"✅ F&O list processed successfully. Found {len(fno_symbols)} unique stock futures symbols.", flush=True)
-        
-        if fno_symbols:
-            sorted_symbols = sorted(list(fno_symbols))
-            print("\n--- F&O Symbol List ---", flush=True)
-            for i in range(0, len(sorted_symbols), 10):
-                chunk = sorted_symbols[i:i+10]
-                print(", ".join(chunk), flush=True)
-            print("-----------------------\n", flush=True)
-            
-        return fno_symbols
-    except BaseException as e: # Changed from Exception to BaseException
-        print(f"❌ Critical error in get_fno_symbols: {e}", flush=True)
-        # --- NEW DEBUGGING STEP ---
-        import traceback
-        print("--- Full Traceback for F&O Error ---", flush=True)
-        traceback.print_exc(file=sys.stdout)
-        print("------------------------------------", flush=True)
-        return set()
-
-# ==============================================================================
-# --- NEW: HELPER FUNCTION FOR FUNDAMENTAL DATA LOGGING ---
-# (NO CHANGES MADE IN THIS SECTION)
-# ==============================================================================
-
-def format_large_number(num):
-    """Formats a large number into a human-readable string (e.g., 1.2B, 345.6M, 78.9K)."""
-    if num is None or not pd.notna(num) or not math.isfinite(num):
-        return "N/A"
-    num = abs(num)
-    if num >= 1_000_000_000:
-        return f"{num / 1_000_000_000:.2f}B"
-    if num >= 1_000_000:
-        return f"{num / 1_000_000:.2f}M"
-    if num >= 1_000:
-        return f"{num / 1_000:.2f}K"
-    return f"{num:.2f}"
-
-# ==============================================================================
-# --- MODIFIED: YAHOO FINANCE FUNCTION FOR QOQ GROWTH ---
-# (NO CHANGES MADE IN THIS SECTION)
-# ==============================================================================
-
-def get_quarterly_growth(symbol, exchange):
-    """
-    Fetches the latest two quarters of financial data, calculates the
-    Quarter-over-Quarter (QoQ) growth, and prints a detailed log.
-    """
-    ticker_symbol = f"{symbol.upper()}.NS" if exchange.upper() == 'NSE' else f"{symbol.upper()}.BO"
+            print(f"  -> DEBUG: An exception occurred during API call for {test_stock['symbol']}: {e}")
+            continue # Try the next stock
     
-    try:
-        stock_ticker = yf.Ticker(ticker_symbol)
-        quarterly_financials = stock_ticker.quarterly_financials
-        
-        # Check if we have at least two quarters of data
-        if quarterly_financials.empty or len(quarterly_financials.columns) < 2:
-            # print(f"   -> [INFO] Not enough quarterly data for {ticker_symbol} to calculate growth.", flush=True)
-            return None, None
+    if not latest_trading_day:
+        print("❌ Could not determine latest trading day after trying all test stocks.")
+        return False
 
-        # Get the latest quarter (Q1) and the previous quarter (Q2)
-        latest_q = quarterly_financials.columns[0]
-        previous_q = quarterly_financials.columns[1]
-
-        # --- Revenue Growth Calculation ---
-        revenue_q1 = quarterly_financials.loc['Total Revenue', latest_q] if 'Total Revenue' in quarterly_financials.index else None
-        revenue_q2 = quarterly_financials.loc['Total Revenue', previous_q] if 'Total Revenue' in quarterly_financials.index else None
-        
-        revenue_growth = None
-        if revenue_q1 is not None and revenue_q2 is not None and pd.notna(revenue_q1) and pd.notna(revenue_q2):
-            if revenue_q2 > 0:
-                revenue_growth = ((revenue_q1 / revenue_q2) - 1) * 100
-            elif revenue_q1 > 0:
-                revenue_growth = float('inf') # Positive growth from zero or negative
-        
-        # --- Profit Growth Calculation ---
-        profit_q1 = quarterly_financials.loc['Net Income', latest_q] if 'Net Income' in quarterly_financials.index else None
-        profit_q2 = quarterly_financials.loc['Net Income', previous_q] if 'Net Income' in quarterly_financials.index else None
-
-        profit_growth = None
-        if profit_q1 is not None and profit_q2 is not None and pd.notna(profit_q1) and pd.notna(profit_q2):
-            if profit_q2 > 0: # Previous quarter was profitable
-                profit_growth = ((profit_q1 / profit_q2) - 1) * 100
-            elif profit_q2 < 0: # Previous quarter was a loss
-                if profit_q1 > 0: # Turned profitable
-                    profit_growth = float('inf') 
-                else: # Loss reduced or increased
-                    profit_growth = ((abs(profit_q2) - abs(profit_q1)) / abs(profit_q2)) * 100
-            elif profit_q2 == 0: # Previous quarter was break-even
-                if profit_q1 > 0:
-                    profit_growth = float('inf')
-                elif profit_q1 < 0:
-                    profit_growth = float('-inf')
-
-        # --- NEW: Detailed Console Output ---
-        profit_growth_display = "N/A"
-        if profit_growth is not None:
-            if math.isinf(profit_growth):
-                profit_growth_display = "Turned Profitable" if profit_growth > 0 else "Increased Loss"
-            elif math.isfinite(profit_growth):
-                profit_growth_display = f"{profit_growth:+.2f}%"
-
-        revenue_growth_display = "N/A"
-        if revenue_growth is not None:
-            if math.isinf(revenue_growth):
-                revenue_growth_display = "Positive from Zero"
-            elif math.isfinite(revenue_growth):
-                revenue_growth_display = f"{revenue_growth:+.2f}%"
-
-        # --- MODIFICATION ---
-        # Added flush=True to ensure output appears immediately in server logs.
-        print(f"   {symbol} -> Profit : {profit_growth_display} (Q1: {format_large_number(profit_q1)}, Q2: {format_large_number(profit_q2)})", flush=True)
-        print(f"   {symbol} -> Revenue: {revenue_growth_display} (Q1: {format_large_number(revenue_q1)}, Q2: {format_large_number(revenue_q2)})", flush=True)
-        # --- END MODIFICATION ---
-
-        return profit_growth, revenue_growth
-
-    except Exception as e:
-        # print(f"   [WARN] Could not fetch or calculate growth for {ticker_symbol}: {e}", flush=True)
-        return None, None
-        
-# ==============================================================================
-# --- REFACTORED ANALYSIS FUNCTIONS (NO API CALLS) ---
-# (NO CHANGES MADE IN THIS SECTION)
-# ==============================================================================
-
-def calculate_sma(daily_df):
-    """Calculates SMA from a pre-fetched daily DataFrame."""
-    if daily_df.empty: return None
-    sma_period = 200 if len(daily_df) >= 200 else 50 if len(daily_df) >= 50 else 0
-    if sma_period == 0: return None
-    sma = round(daily_df["Close"][-sma_period:].mean(), 2)
-    is_above = (daily_df["Close"][-10:] > sma).any()
-    return (sma, sma_period, is_above)
-
-def calculate_pm_logic(daily_df):
-    """Calculates previous month breakout from a pre-fetched daily DataFrame."""
-    if daily_df.empty: return ""
+    from_date = latest_trading_day.strftime('%Y-%m-%d 09:15')
+    to_date = latest_trading_day.strftime('%Y-%m-%d 15:30')
+    date_checked = latest_trading_day.strftime('%Y-%m-%d')
+    print(f"\nFetching all stock data for the confirmed latest trading day: {date_checked}...")
     
-    df_full = daily_df.copy()
-    
-    today = date.today()
-    first_day_this_month = today.replace(day=1)
-    last_day_prev_month = first_day_this_month - timedelta(days=1)
-    first_day_prev_month = last_day_prev_month.replace(day=1)
-    last_day_prev2_month = first_day_prev_month - timedelta(days=1)
-    first_day_prev2_month = last_day_prev2_month.replace(day=1)
-    
-    df_pm = df_full.loc[first_day_prev_month:last_day_prev_month]
-    df_pp = df_full.loc[first_day_prev2_month:last_day_prev2_month]
-    df_current = df_full[df_full.index.date >= first_day_this_month]
-    
-    pm_high = df_pm["High"].max() if not df_pm.empty else None
-    pp_high = df_pp["High"].max() if not df_pp.empty else None
-    
-    # --- CHANGE IMPLEMENTED HERE: Using "High" price instead of "Close" for breakout check ---
-    if pm_high and not df_current.empty and (df_current["High"] > pm_high).any():
-        breakout_date = df_current[df_current["High"] > pm_high].index[0]
-        return f"{last_day_prev_month.strftime('%B')} ({breakout_date.strftime('%d %B')})"
-    if pp_high and not df_pm.empty and (df_pm["High"] > pp_high).any():
-        breakout_date = df_pm[df_pm["High"] > pp_high].index[0]
-        return f"{last_day_prev2_month.strftime('%B')} ({breakout_date.strftime('%d %B')})"
-    return ""
-
-def calculate_inside_bar(daily_df, interval):
-    """Calculates inside bar count from a pre-fetched daily DataFrame."""
-    if daily_df.empty: return 0
-
-    # --- CHANGE IMPLEMENTED HERE: Set tolerance based on interval ---
-    if interval == 'daily':
-        tolerance_multiplier = 1.01  # 1% tolerance for Daily Inside Bars
-    else:
-        tolerance_multiplier = 1.02  # 2% tolerance for Weekly and Monthly
-
-    resample_map = {'monthly': 'ME', 'weekly': 'W', 'daily': 'D'}
-    resample_period = resample_map[interval]
-
-    # Define aggregation rules for resampling
-    agg_rules = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
-    df = daily_df.resample(resample_period).agg(agg_rules).dropna()
-
-    if not df.empty:
-        last_timestamp = df.index[-1]
-        now_timestamp = pd.Timestamp.now()
-        if interval == 'daily' and last_timestamp.date() == now_timestamp.date(): df = df.iloc[:-1]
-        if interval == 'weekly' and last_timestamp.week == now_timestamp.week: df = df.iloc[:-1]
-        if interval == 'monthly' and last_timestamp.month == now_timestamp.month: df = df.iloc[:-1]
-
-    if len(df) < 2: return 0
-    count = 0
-    for i in range(len(df) - 1, 0, -1):
-        if (df.iloc[i]['High'] <= df.iloc[i-1]['High'] * tolerance_multiplier) and (df.iloc[i]['Close'] >= df.iloc[i-1]['Low']):
-            count += 1
-            if count >= 5: break
-        else:
-            break
-    return count
-
-def calculate_monthly_hh_count(daily_df):
-    """Calculates the number of consecutive monthly higher highs."""
-    if daily_df.empty:
-        return 0
-
-    agg_rules = {'High': 'max'}
-    df_monthly = daily_df.resample('ME').agg(agg_rules).dropna()
-
-    # Remove current incomplete month if it exists
-    if not df_monthly.empty and df_monthly.index[-1].month == datetime.now().month:
-        df_monthly = df_monthly.iloc[:-1]
-
-    # Need at least 2 months to make a comparison
-    if len(df_monthly) < 2:
-        return 0
-
-    count = 0
-    # Iterate backwards from the last completed month up to a max of 5 comparisons
-    for i in range(1, min(6, len(df_monthly))):
-        current_month_high = df_monthly.iloc[-i]['High']
-        previous_month_high = df_monthly.iloc[-(i + 1)]['High']
-
-        if current_month_high > previous_month_high:
-            count += 1
-        else:
-            # The chain of higher highs is broken, so stop counting
-            break
-    return count
-
-# --- NEW: Combined Intraday Scan Function ---
-def calculate_intraday_momentum_scan(intraday_data, is_fno):
-    """
-    Calculates the most recent significant up and down moves from pre-fetched intraday data.
-    """
-    up_result = ""
-    down_result = ""
-
-    if not intraday_data:
-        return up_result, down_result
-
-    combined_df = pd.concat(intraday_data)
-    
-    # --- UP SCAN LOGIC ---
-    up_threshold = 1.5 if is_fno else 3.0
-    combined_df['gain'] = ((combined_df['Close'] / combined_df['Low']) - 1) * 100
-    significant_gains = combined_df[combined_df['gain'] >= up_threshold].copy()
-    
-    if not significant_gains.empty:
-        # Sort by timestamp (latest first) to find the most recent signal
-        sorted_gains = significant_gains.sort_index(ascending=False)
-        latest_candle = sorted_gains.iloc[0]
-        latest_gain = latest_candle['gain']
-        timestamp_of_latest_gain = latest_candle.name
-        formatted_time = timestamp_of_latest_gain.strftime("%d %B, %I:%M %p")
-        up_result = f"'+{latest_gain:.2f}% ({formatted_time})"
-
-    # --- DOWN SCAN LOGIC ---
-    down_threshold = 1.5 if is_fno else 3.0
-    combined_df['drop'] = (1 - (combined_df['Close'] / combined_df['High'])) * 100
-    significant_drops = combined_df[combined_df['drop'] >= down_threshold].copy()
-
-    if not significant_drops.empty:
-        # Sort by timestamp (latest first) to find the most recent signal
-        sorted_drops = significant_drops.sort_index(ascending=False)
-        latest_candle = sorted_drops.iloc[0]
-        max_drop = latest_candle['drop']
-        timestamp_of_max_drop = latest_candle.name
-        formatted_time = timestamp_of_max_drop.strftime("%d %B, %I:%M %p")
-        down_result = f"'-{max_drop:.2f}% ({formatted_time})"
-
-    return up_result, down_result
-
-# ==============================================================================
-# --- MAIN SCRIPT LOGIC ---
-# ==============================================================================
-
-def run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_row_map):
-    """Main function to run the entire scanning process."""
-    print("\n" + "="*80, flush=True)
-    print("--- [START] ENTERING 'run_ath_and_price_scan' FUNCTION ---", flush=True)
-    print("="*80 + "\n", flush=True)
-
-    try:
-        print("\n--- Starting ATH + Price Scan Logic ---", flush=True)
-
-        # === Check if ATH update is allowed ===
-        print("[ATH-SCAN] 1. Checking if ATH update is allowed...", flush=True)
-        now = datetime.now()
-        ath_allowed = (
-            (now.weekday() == 4 and now.time() >= dt_time(16, 0)) or
-            (now.weekday() > 4) or
-            (now.weekday() == 0 and now.time() <= dt_time(8, 0))
-        )
-        print(f"[ATH-SCAN] 1a. Is ATH update allowed? -> {ath_allowed}", flush=True)
-
-
-        # === ATH Cache Update (Columns AJ and AK) ===
-        if ath_allowed:
-            print("📈 [ATH-SCAN] 2. Running ATH Cache Update using Angel One API...", flush=True)
-            today_str = now.strftime("%d-%b-%Y")
-            updates = 0
-            updates_to_sheet = []
-
+    with data_table.batch_writer() as batch:
+        for index, stock in enumerate(stocks_to_update):
+            print(f"  -> [{index + 1}/{len(stocks_to_update)}] Fetching {stock['symbol']}...")
             try:
-                print("   [ATH-SCAN] 2a. Attempting to get all values from cache_sheet for ATH update...", flush=True)
-                all_cache_data = cache_sheet.get_all_values()
-                print(f"   [ATH-SCAN] 2b. Successfully fetched {len(all_cache_data)} total rows from the sheet for ATH update.", flush=True)
-            except BaseException as e:
-                print(f"   [ATH-SCAN] ❌ CRITICAL ERROR: Could not read from ATH Cache sheet: {e}", flush=True)
-                import traceback
-                traceback.print_exc(file=sys.stdout)
-                all_cache_data = []
+                # Now we query for the single specific day we found
+                hist_params = {"exchange": "NSE", "symboltoken": str(stock['token']), "interval": "ONE_DAY", "fromdate": from_date, "todate": to_date}
+                api_response = smartApi.getCandleData(hist_params)
+                if api_response and api_response.get('status') and api_response.get('data'):
+                    candle = api_response['data'][0]
+                    batch.put_item(Item={
+                        'instrument_token': stock['token'], 'date': candle[0].split('T')[0],
+                        'symbol': stock['symbol'], 'open': Decimal(str(candle[1])),
+                        'high': Decimal(str(candle[2])), 'low': Decimal(str(candle[3])),
+                        'close': Decimal(str(candle[4])), 'volume': int(candle[5])
+                    })
+                time.sleep(0.4)
+            except Exception as e:
+                print(f"     -> ERROR for {stock['symbol']}: {e}")
+    
+    print("✅ Daily data update complete!")
+    return True
 
-            print("   [ATH-SCAN] 2c. Building a map of existing cache data...", flush=True)
-            cache_data_map = {
-                row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): 
-                (row[35] if len(row) > 35 else None, row[36] if len(row) > 36 else None) 
-                for row in all_cache_data[2:] if len(row) > 34 and row[34].strip()
-            }
-            print(f"   [ATH-SCAN] 2d. Cache data map built with {len(cache_data_map)} entries.", flush=True)
-            
-            print("   [ATH-SCAN] 2e. Identifying symbols that require an ATH update (last update date is not today)...", flush=True)
-            symbols_to_update_ath = [s for s in symbols_for_processing if cache_data_map.get(s['base_symbol'], (None, None))[1] != today_str]
-            total_symbols_to_update = len(symbols_to_update_ath)
-            print(f"   [ATH-SCAN] 2f. Found {total_symbols_to_update} symbols requiring an ATH update today.", flush=True)
-            
-            for i, symbol_info in enumerate(symbols_to_update_ath):
-                base_symbol = symbol_info['base_symbol']
-                token = symbol_info['token']
-                exchange = symbol_info['exchange']
-                
-                print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] Processing ATH for '{base_symbol}' (Token: {token})", flush=True)
-                
-                gs_row_num = symbol_to_row_map.get(base_symbol)
-                if not gs_row_num:
-                    print(f"      [ATH-SCAN]---> [WARN] Could not find row number for '{base_symbol}'. Skipping.", flush=True)
-                    continue 
-                
-                print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] Calling 'fetch_full_history_for_ath'...", flush=True)
-                new_ath = fetch_full_history_for_ath(token, exchange)
-                print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] API call returned. New ATH: {new_ath}", flush=True)
+# ==============================================================================
+# --- 4. END-OF-DAY SCREENER ANALYSIS LOGIC ---
+# ==============================================================================
+def _format_result_eod(latest, previous):
+    return {"symbol": latest['symbol'], "changePct": ((latest['close'] - previous['close']) / previous['close']) * 100, "price": latest['close'], "volume": int(latest['volume'])}
 
-                if new_ath is not None and math.isfinite(new_ath):
-                    new_ath = round(new_ath, 2)
-                    prev_ath_str, _ = cache_data_map.get(base_symbol, (None, None))
-                    prev_ath = None
-                    try:
-                        if prev_ath_str: prev_ath = float(prev_ath_str)
-                    except (ValueError, TypeError): pass
-
-                    print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] Previous ATH: {prev_ath}. New ATH: {new_ath}", flush=True)
-                    if new_ath != prev_ath:
-                        print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] ATH has changed. Adding to batch update list.", flush=True)
-                        updates_to_sheet.append({'range': f'AJ{gs_row_num}:AK{gs_row_num}', 'values': [[new_ath, today_str]]})
-                        updates += 1
-                else:
-                    print(f"      [ATH-SCAN]---> [{i+1}/{total_symbols_to_update}] No valid ATH found. Skipping update.", flush=True)
-                time.sleep(API_REQUEST_DELAY)
-
-            if updates_to_sheet:
-                try:
-                    print(f"\n   [ATH-SCAN] 2g. Found {len(updates_to_sheet)} total ATH updates to write. Performing batch update to Google Sheet...", flush=True)
-                    cache_sheet.batch_update(updates_to_sheet, value_input_option='USER_ENTERED')
-                    print(f"   [ATH-SCAN] ✅ ATH Cache update complete: {updates} record(s) successfully updated in the sheet.", flush=True)
-                except BaseException as e:
-                    print(f"   [ATH-SCAN] ❌ CRITICAL ERROR: Could not perform batch update for ATH Cache: {e}", flush=True)
-                    import traceback
-                    traceback.print_exc(file=sys.stdout)
-            else:
-                print("\n   [ATH-SCAN] ℹ️ No ATH records needed updating.", flush=True)
-        else:
-            print(f"🕒 Skipping ATH Cache update because it is not within the allowed time range.", flush=True)
-
-
-        # === Price Scan - Fetching LTPs ===
-        print("\n⚡ [LTP-SCAN] 3. Fetching LTPs for price scan using Angel One API...", flush=True)
+# --- All End-of-Day screener functions ---
+# (Note: Functions are collapsed for brevity)
+def run_screener_near_ath(all_tokens):
+    screener_id = 'near_ath'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
         try:
-            print("   [LTP-SCAN] 3a. Attempting to get all values from cache_sheet for LTP calculation...", flush=True)
-            ath_data_raw = cache_sheet.get_all_values()
-            print(f"   [LTP-SCAN] 3b. Successfully fetched {len(ath_data_raw)} total rows from the sheet.", flush=True)
-            ath_data = [row for row in ath_data_raw[2:] if len(row) > 35 and row[34].strip()]
-            print(f"   [LTP-SCAN] 3c. Filtered down to {len(ath_data)} rows with valid data for ATH map.", flush=True)
-        except BaseException as e:
-            print(f"   [LTP-SCAN] ❌ CRITICAL ERROR: Could not read ATH data for LTP calculation: {e}", flush=True)
-            import traceback
-            traceback.print_exc(file=sys.stdout)
-            ath_data = []
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 22: continue
+            df = pd.DataFrame(stock_data)
+            all_time_high = df['high'].max()
+            latest = df.sort_values(by='date', ascending=False).iloc[0]
+            previous = df.sort_values(by='date', ascending=False).iloc[1]
+            if latest['close'] >= (all_time_high * Decimal('0.75')): final_results.append(_format_result_eod(latest, previous))
+        except Exception: continue
+    return screener_id, final_results
 
-        print("   [LTP-SCAN] 3d. Building ATH map from sheet data...", flush=True)
-        ath_map = {row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): float(row[35]) for row in ath_data if row[35]}
-        print(f"   [LTP-SCAN] 3e. ATH map built with {len(ath_map)} entries.", flush=True)
+def run_screener_recent_ipos(all_tokens): return 'recent_ipos', []
 
+def run_screener_above_200_sma(all_tokens):
+    screener_id = 'above_200_sma'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            start_date_str = (datetime.now() - timedelta(days=300)).strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 200: continue
+            stock_data.sort(key=lambda x: x['date'])
+            df = pd.DataFrame(stock_data)
+            df['sma_200'] = df['close'].rolling(window=200).mean()
+            latest = df.iloc[-1]
+            previous = df.iloc[-2]
+            if pd.notna(latest['sma_200']) and latest['close'] > latest['sma_200']: final_results.append(_format_result_eod(latest, previous))
+        except Exception: continue
+    return screener_id, final_results
 
-        ltp_map = {}
-        tokens_to_fetch_ltp = [s['token'] for s in symbols_for_processing if s['token']]
-        print(f"   [LTP-SCAN] 3f. Preparing to fetch LTPs for {len(tokens_to_fetch_ltp)} total tokens.", flush=True)
+def run_screener_multi_year_breakout(all_tokens):
+    screener_id = 'multi_year_breakout'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            start_date_str = (datetime.now() - timedelta(days=3*365)).strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 365: continue
+            df = pd.DataFrame(stock_data).sort_values(by='date')
+            latest = df.iloc[-1]
+            previous = df.iloc[-2]
+            breakout_level = df.iloc[:-22]['high'].max() 
+            if latest['close'] > breakout_level: final_results.append(_format_result_eod(latest, previous))
+        except Exception: continue
+    return screener_id, final_results
 
-        if tokens_to_fetch_ltp:
-            tokens_by_exchange = {}
-            for s_info in symbols_for_processing:
-                if s_info['token'] not in tokens_by_exchange.setdefault(s_info['exchange'], []):
-                    tokens_by_exchange[s_info['exchange']].append(s_info['token'])
-            
-            print("   [LTP-SCAN] 3g. Grouped tokens by exchange.", flush=True)
+def run_screener_monthly_high_breakout(all_tokens):
+    screener_id = 'monthly_high_breakout'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    today = date.today()
+    first_day_of_current_month = today.replace(day=1)
+    last_day_of_prev_month = first_day_of_current_month - timedelta(days=1)
+    first_day_of_prev_month = last_day_of_prev_month.replace(day=1)
+    for token in all_tokens:
+        try:
+            start_date_str = first_day_of_prev_month.strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 22: continue
+            df = pd.DataFrame(stock_data)
+            df['date_dt'] = pd.to_datetime(df['date'])
+            prev_month_df = df[df['date_dt'].dt.month == first_day_of_prev_month.month]
+            if prev_month_df.empty: continue
+            prev_month_high = prev_month_df['high'].max()
+            latest = df.sort_values(by='date', ascending=False).iloc[0]
+            previous = df.sort_values(by='date', ascending=False).iloc[1]
+            if latest['close'] > prev_month_high: final_results.append(_format_result_eod(latest, previous))
+        except Exception: continue
+    return screener_id, final_results
 
-            for exchange, tokens in tokens_by_exchange.items():
-                print(f"   [LTP-SCAN]---> Processing {len(tokens)} tokens for exchange: {exchange}", flush=True)
-                for i in range(0, len(tokens), 50):
-                    batch_tokens = tokens[i:i+50]
-                    payload = {"mode": "LTP", "exchangeTokens": {exchange: batch_tokens}}
-                    try:
-                        print(f"      [LTP-SCAN]---> Fetching batch {i//50 + 1} ({len(batch_tokens)} tokens)...", flush=True)
-                        response = smart_api_obj.getMarketData(**payload)
-                        if response and response.get("status") and response.get("data"):
-                            for item in response["data"]["fetched"]:
-                                ltp_map[item['symbolToken']] = item.get('ltp')
-                            print(f"      [LTP-SCAN]---> Batch {i//50 + 1} successful.", flush=True)
-                        else:
-                            print(f"      [LTP-SCAN]---> [WARN] Batch {i//50 + 1} returned invalid data. Response: {response}", flush=True)
+def run_screener_five_pct_breakout(all_tokens):
+    screener_id = 'five_pct_breakout'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token), ScanIndexForward=False, Limit=2)
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 2: continue
+            latest = stock_data[0]
+            previous = stock_data[1]
+            if latest['open'] > (previous['close'] * Decimal('1.05')): final_results.append(_format_result_eod(latest, previous))
+        except Exception: continue
+    return screener_id, final_results
 
-                        time.sleep(API_REQUEST_DELAY)
-                    except BaseException as e:
-                        print(f"      [LTP-SCAN]---> ❌ ERROR fetching LTP batch for {exchange}: {e}", flush=True)
-                        import traceback
-                        traceback.print_exc(file=sys.stdout)
+def run_screener_monthly_inside_candle(all_tokens):
+    screener_id = 'monthly_inside_candle'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    today = date.today()
+    first_day_current_month = today.replace(day=1)
+    last_day_prev_month = first_day_current_month - timedelta(days=1)
+    first_day_prev_month = last_day_prev_month.replace(day=1)
+    for token in all_tokens:
+        try:
+            start_date_str = (first_day_prev_month - relativedelta(months=1)).strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 40: continue
+            df = pd.DataFrame(stock_data)
+            df['date_dt'] = pd.to_datetime(df['date'])
+            current_month_df = df[df['date_dt'].dt.month == today.month]
+            prev_month_df = df[df['date_dt'].dt.month == first_day_prev_month.month]
+            if current_month_df.empty or prev_month_df.empty: continue
+            current_high, current_low = current_month_df['high'].max(), current_month_df['low'].min()
+            prev_high, prev_low = prev_month_df['high'].max(), prev_month_df['low'].min()
+            if current_high < prev_high and current_low > prev_low:
+                latest = df.sort_values(by='date', ascending=False).iloc[0]
+                previous = df.sort_values(by='date', ascending=False).iloc[1]
+                final_results.append(_format_result_eod(latest, previous))
+        except Exception: continue
+    return screener_id, final_results
 
-        print(f"✅ [LTP-SCAN] LTP data fetching complete. Found {len(ltp_map)} valid records.", flush=True)
+def run_screener_tight_weekly_base(all_tokens):
+    screener_id = 'tight_weekly_base'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            start_date_str = (datetime.now() - timedelta(weeks=10)).strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 25: continue
+            df = pd.DataFrame(stock_data)
+            df.set_index(pd.to_datetime(df['date']), inplace=True)
+            weekly_df = df.resample('W').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}).dropna()
+            if len(weekly_df) < 4: continue
+            last_3_weeks = weekly_df.iloc[-3:].copy()
+            last_3_weeks['range_pct'] = (last_3_weeks['high'] - last_3_weeks['low']) / last_3_weeks['low']
+            if (last_3_weeks['range_pct'] < Decimal('0.1')).all():
+                latest = df.iloc[-1]
+                previous = df.iloc[-2]
+                final_results.append(_format_result_eod(latest, previous))
+        except Exception: continue
+    return screener_id, final_results
 
-        # === NEW EFFICIENT WORKFLOW =================================================
-        print("\n🚚 [ANALYSIS] 4. Starting efficient detailed analysis workflow...", flush=True)
+def run_screener_tight_daily_base(all_tokens):
+    screener_id = 'tight_daily_base'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token), ScanIndexForward=False, Limit=10)
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 10: continue
+            df = pd.DataFrame(stock_data)
+            if (df['high'].max() - df['low'].min()) / df['low'].min() < Decimal('0.08'):
+                final_results.append(_format_result_eod(stock_data[0], stock_data[1]))
+        except Exception: continue
+    return screener_id, final_results
 
-        # --- STEP 1: Pre-filter symbols that have basic data ---
-        print("   [ANALYSIS] 4a. Pre-filtering symbols: checking for valid LTP and ATH data...", flush=True)
-        pre_filtered_symbols = []
-        for s_info in symbols_for_processing:
-            ltp = ltp_map.get(s_info['token'])
-            ath = ath_map.get(s_info['base_symbol'])
-            if ltp and ath:
-                s_info.update({'ltp': ltp, 'ath': ath})
-                pre_filtered_symbols.append(s_info)
-        print(f"   [ANALYSIS] 4b. Found {len(pre_filtered_symbols)} symbols after pre-filtering.", flush=True)
+def run_screener_low_of_highest_up_candle(all_tokens):
+    screener_id = 'low_of_highest_up_candle'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            start_date_str = (datetime.now() - timedelta(days=45)).strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 22: continue
+            df = pd.DataFrame(stock_data)
+            df['gain_pct'] = (df['close'] - df['open']) / df['open']
+            support_level = df.loc[df['gain_pct'].idxmax()]['low']
+            latest = df.sort_values(by='date', ascending=False).iloc[0]
+            if latest['close'] <= (support_level * Decimal('1.02')):
+                final_results.append(_format_result_eod(latest, df.sort_values(by='date', ascending=False).iloc[1]))
+        except Exception: continue
+    return screener_id, final_results
 
-        # --- STEP 2: Fetch 1 year of daily data ONCE for pre-filtered stocks ---
-        print(f"   [ANALYSIS] 4c. Starting to fetch 1 year of daily historical data for {len(pre_filtered_symbols)} stocks...", flush=True)
-        historical_data_map = {}
-        end_date = datetime.now()
-        start_date = end_date - relativedelta(years=1)
-        for i, s_info in enumerate(pre_filtered_symbols):
-            token = s_info['token']
-            exchange = s_info['exchange']
-            print(f"      [ANALYSIS]---> [{i+1}/{len(pre_filtered_symbols)}] Fetching daily data for '{s_info['base_symbol']}'...", flush=True)
-            df_daily = fetch_history_angelone(token, exchange, "ONE_DAY", start_date, end_date)
-            historical_data_map[token] = df_daily
-        print(f"   [ANALYSIS] 4d. ✅ Finished fetching historical data. Stored data for {len(historical_data_map)} stocks.", flush=True)
+def run_screener_low_of_high_volume_candle(all_tokens):
+    screener_id = 'low_of_high_volume_candle'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            start_date_str = (datetime.now() - timedelta(days=45)).strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 22: continue
+            df = pd.DataFrame(stock_data)
+            support_level = df.loc[df['volume'].idxmax()]['low']
+            latest = df.sort_values(by='date', ascending=False).iloc[0]
+            if latest['close'] <= (support_level * Decimal('1.02')):
+                final_results.append(_format_result_eod(latest, df.sort_values(by='date', ascending=False).iloc[1]))
+        except Exception: continue
+    return screener_id, final_results
 
-        # --- STEP 3: Perform final filtering and all calculations from stored data ---
-        print("   [ANALYSIS] 4e. Performing final filtering and all calculations on in-memory data...", flush=True)
-        scanned_symbols_info = []
-        final_output_rows = []
-        
-        print("      [ANALYSIS]---> Applying filter: F&O stocks auto-included, Cash stocks filtered by drop >= -40% from ATH...", flush=True)
-        for s_info in pre_filtered_symbols:
-            token = s_info['token']
-            daily_df = historical_data_map.get(token)
+def run_screener_low_of_3_pct_down_candle(all_tokens):
+    screener_id = 'low_of_3_pct_down_candle'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            start_date_str = (datetime.now() - timedelta(days=45)).strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 22: continue
+            df = pd.DataFrame(stock_data).sort_values(by='date')
+            df['change_pct'] = (df['close'] - df['open']) / df['open']
+            down_candles = df[df['change_pct'] <= Decimal('-0.03')]
+            if down_candles.empty: continue
+            support_level = down_candles.iloc[-1]['low']
+            latest = df.iloc[-1]
+            if latest['close'] <= (support_level * Decimal('1.02')):
+                final_results.append(_format_result_eod(latest, df.iloc[-2]))
+        except Exception: continue
+    return screener_id, final_results
 
-            if daily_df is None or daily_df.empty:
-                continue
-            
-            three_months_ago = datetime.now() - relativedelta(months=3)
-            lowest_low = daily_df[daily_df.index >= three_months_ago]['Low'].min()
-            
-            if not math.isfinite(lowest_low):
-                 continue
+def run_screener_above_10_sma(all_tokens):
+    screener_id = 'above_10_sma'
+    print(f"--- Running Screener: {screener_id} ---")
+    final_results = []
+    for token in all_tokens:
+        try:
+            start_date_str = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
+            query_response = data_table.query(KeyConditionExpression=Key('instrument_token').eq(token) & Key('date').gte(start_date_str))
+            stock_data = query_response.get('Items', [])
+            if len(stock_data) < 10: continue
+            stock_data.sort(key=lambda x: x['date'])
+            df = pd.DataFrame(stock_data)
+            df['sma_10'] = df['close'].rolling(window=10).mean()
+            latest = df.iloc[-1]
+            previous = df.iloc[-2]
+            if pd.notna(latest['sma_10']) and latest['close'] > latest['sma_10']:
+                final_results.append(_format_result_eod(latest, previous))
+        except Exception: continue
+    return screener_id, final_results
 
-            drop_pct = round(((lowest_low / s_info['ath']) * 100) - 100, 2)
-            
-            is_fno_check = s_info['base_symbol'] in fno_symbols_set
-            if is_fno_check or drop_pct >= -40:
-                s_info['drop_pct'] = drop_pct
-                scanned_symbols_info.append(s_info)
-
-        print(f"      [ANALYSIS]---> Found {len(scanned_symbols_info)} stocks passing the final drop percentage filter.", flush=True)
-        print("      [ANALYSIS]---> Now calculating all technical indicators for these filtered stocks...", flush=True)
-
-        for i, s_info in enumerate(scanned_symbols_info):
-            token = s_info['token']
-            daily_df = historical_data_map.get(token)
-            print(f"         [ANALYSIS]--->>> [{i+1}/{len(scanned_symbols_info)}] Calculating for '{s_info['base_symbol']}'...", flush=True)
-                
-            sma_data = calculate_sma(daily_df)
-            pm_flag = calculate_pm_logic(daily_df)
-            mib_flag = calculate_inside_bar(daily_df, 'monthly')
-            wib_flag = calculate_inside_bar(daily_df, 'weekly')
-            dib_flag = calculate_inside_bar(daily_df, 'daily')
-            monthly_hh_count = calculate_monthly_hh_count(daily_df)
-            
-            start_date_scan = datetime.now() - relativedelta(weeks=2)
-            end_date_scan = datetime.now()
-            timeframe_map_equity = {"ONE_HOUR": "60 min", "THIRTY_MINUTE": "30 min", "FIFTEEN_MINUTE": "15 min"}
-            intraday_data_list = []
-            for tf_code, tf_display in timeframe_map_equity.items():
-                df = fetch_history_angelone(token, s_info['exchange'], tf_code, start_date_scan, end_date_scan)
-                if not df.empty:
-                    df['timeframe'] = tf_display
-                    intraday_data_list.append(df)
-            
-            is_fno = s_info['base_symbol'] in fno_symbols_set
-            intraday_up_result, intraday_down_result = calculate_intraday_momentum_scan(intraday_data_list, is_fno)
-
-            print(f"         [ANALYSIS]--->>> [{i+1}/{len(scanned_symbols_info)}] Fetching quarterly growth data for '{s_info['base_symbol']}'...", flush=True)
-            profit_growth, revenue_growth = get_quarterly_growth(s_info['base_symbol'], s_info['exchange'])
-            time.sleep(0.2) 
-
-            sanitized_profit_growth = profit_growth if profit_growth is not None and math.isfinite(profit_growth) else ""
-            sanitized_revenue_growth = revenue_growth if revenue_growth is not None and math.isfinite(revenue_growth) else ""
-
-            sma_display, ltp_gt_sma_flag = "", ""
-            if sma_data:
-                sma_value, sma_period, is_above = sma_data
-                sma_display = f"{sma_value}({sma_period})"
-                if is_above:
-                    ltp_gt_sma_flag = f">{sma_period}"
-            
-            row_data = [
-                "FNO" if is_fno else "Cash", # C
-                s_info['ltp'],               # D
-                s_info['ath'],               # E
-                s_info['drop_pct'],          # F
-                mib_flag,                    # G
-                monthly_hh_count,            # H
-                sma_display,                 # I
-                ltp_gt_sma_flag,             # J
-                pm_flag,                     # K
-                wib_flag,                    # L
-                dib_flag,                    # M
-                intraday_up_result,          # N
-                intraday_down_result,        # O
-                sanitized_profit_growth,     # P
-                sanitized_revenue_growth,    # Q
-            ]
-            final_output_rows.append(row_data)
-
-        print(f"✅ [ANALYSIS] Final analysis calculation loop complete. Have results for {len(scanned_symbols_info)} stocks.", flush=True)
-
-        # --- STEP 4: Write filtered symbols and results to Google Sheet ---
-        print("   [ANALYSIS] 4f. Preparing to write final results to the Google Sheet...", flush=True)
-        if scanned_symbols_info:
-            try:
-                print("      [ANALYSIS]---> Step 1: Clearing old data from sheet range B3:Q2500...", flush=True)
-                cache_sheet.batch_clear(['B3:Q2500'])
-                print("      [ANALYSIS]---> Step 1: Old data cleared successfully.", flush=True)
-                
-                print("      [ANALYSIS]---> Step 2: Writing new symbol list to column B...", flush=True)
-                column_b_data = [[f"{s['exchange']}:{s['base_symbol']},"] for s in scanned_symbols_info]
-                range_to_update_b = f"B3:B{len(column_b_data) + 2}"
-                cache_sheet.update(values=column_b_data, range_name=range_to_update_b, value_input_option='USER_ENTERED')
-                print(f"      [ANALYSIS]---> Step 2: Wrote {len(column_b_data)} filtered symbols to Column B.", flush=True)
-
-                if final_output_rows:
-                    print("      [ANALYSIS]---> Step 3: Writing detailed results to columns C:Q...", flush=True)
-                    range_to_update_details = f"C3:Q{len(final_output_rows) + 2}"
-                    cache_sheet.update(values=final_output_rows, range_name=range_to_update_details, value_input_option='USER_ENTERED')
-                    print("      [ANALYSIS]---> Step 3: Detailed results written.", flush=True)
-                    
-                    print("      [ANALYSIS]---> Step 4: Applying number formatting to relevant columns...", flush=True)
-                    cache_sheet.format(f"D3:F{len(final_output_rows) + 2}", {'numberFormat': {'type': 'NUMBER', 'pattern': '0.00'}})
-                    cache_sheet.format(f"P3:Q{len(final_output_rows) + 2}", {'numberFormat': {'type': 'PERCENT', 'pattern': '0.00"%"'}})
-                    print(f"   [ANALYSIS] ✅ All detailed scan results written and formatted in ATH Cache sheet.", flush=True)
-
-            except BaseException as e:
-                print(f"   [ANALYSIS] ❌ CRITICAL ERROR: Could not write data to ATH Cache sheet: {e}", flush=True)
-                import traceback
-                traceback.print_exc(file=sys.stdout)
-        else:
-            print("ℹ️ No symbols passed the final filter. Clearing old results from sheet.", flush=True)
-            try:
-                cache_sheet.batch_clear(['B3:Q2500'])
-            except BaseException as e:
-                print(f"❌ CRITICAL ERROR: Could not clear old results from sheet: {e}", flush=True)
-                import traceback
-                traceback.print_exc(file=sys.stdout)
-
-        print("\n--- Technical scan process finished successfully. ---", flush=True)
-    
-    except BaseException as e:
-        print(f"❌ A FATAL, UNCAUGHT exception occurred in 'run_ath_and_price_scan': {e}", flush=True)
-        import traceback
-        print("--- Full Traceback for ATH/Price Scan Error ---", flush=True)
-        traceback.print_exc(file=sys.stdout)
-        print("---------------------------------------------", flush=True)
-    
-    print("\n" + "="*80, flush=True)
-    print("--- [END] EXITING 'run_ath_and_price_scan' FUNCTION ---", flush=True)
-    print("="*80 + "\n", flush=True)
-
-
-# --- START: NEW WRAPPER AND SCHEDULER LOGIC ---
-
-def run_daily_scan():
-    """This function contains the entire 4-hour analysis logic."""
-    print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Starting the daily 4-hour scan...", flush=True)
-    
-    initialize_services()
-    
+def run_all_eod_screeners():
+    print("\nStarting all end-of-day screener analyses...")
     try:
-        # --- NEW WORKFLOW ---
-        # 1. First, get all symbols from the sheet and find their tokens
-        print("[DEBUG] Pre-loading all symbols from Google Sheet...", flush=True)
-        # --- NEW DEBUGGING STEP ---
-        print("   [SHEET-DEBUG] About to call stock_sheet.get_all_values()...", flush=True)
-        all_sheet_data = stock_sheet.get_all_values()[2:]
-        print("   [SHEET-DEBUG] Successfully fetched all values from the sheet.", flush=True)
-        # --- END DEBUGGING STEP ---
+        all_tokens = set()
+        if TEST_MODE:
+            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.")
+            scan_kwargs = {}
+            while len(all_tokens) < TEST_STOCK_LIMIT:
+                response = data_table.scan(ProjectionExpression='instrument_token', **scan_kwargs)
+                items = response.get('Items', [])
+                if not items: break
+                for item in items:
+                    if 'instrument_token' in item:
+                        all_tokens.add(int(item['instrument_token']))
+                        if len(all_tokens) >= TEST_STOCK_LIMIT:
+                            break
+                if 'LastEvaluatedKey' in response and len(all_tokens) < TEST_STOCK_LIMIT:
+                    scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                else:
+                    break
+        else: # Full Scan
+            print("Scanning for all unique stock tokens...")
+            scan_kwargs = {'ProjectionExpression': 'instrument_token'}
+            response = data_table.scan(**scan_kwargs)
+            all_items = response.get('Items', [])
+            while 'LastEvaluatedKey' in response:
+                scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                response = data_table.scan(**scan_kwargs)
+                all_items.extend(response.get('Items', []))
+            all_tokens = {int(item['instrument_token']) for item in all_items}
 
-        symbols_raw = [row[34] for row in all_sheet_data if len(row) > 34 and row[34]]
-        symbol_to_row_map = {
-            row[34].strip().upper().replace("-EQ", "").replace("-BE", ""): index + 3 
-            for index, row in enumerate(all_sheet_data) if len(row) > 34 and row[34].strip()
-        }
+        print(f"Found {len(all_tokens)} unique stocks to analyze.")
+
+        eod_screener_functions = [
+            run_screener_near_ath, run_screener_recent_ipos, run_screener_above_200_sma,
+            run_screener_multi_year_breakout, run_screener_monthly_high_breakout,
+            run_screener_five_pct_breakout, run_screener_monthly_inside_candle,
+            run_screener_tight_weekly_base, run_screener_tight_daily_base,
+            run_screener_low_of_highest_up_candle, run_screener_low_of_high_volume_candle,
+            run_screener_low_of_3_pct_down_candle, run_screener_above_10_sma,
+        ]
+
+        with results_table.batch_writer() as batch:
+            for func in eod_screener_functions:
+                screener_id, results = func(all_tokens)
+                if results is not None:
+                    print(f"  -> {screener_id} found {len(results)} matching stocks.")
+                    batch.put_item(Item={
+                        'screener_name': screener_id,
+                        'results': results,
+                        'last_updated': datetime.now().isoformat()
+                    })
         
-        symbols_for_processing = []
-        for s_raw in symbols_raw:
-            if not isinstance(s_raw, str) or not s_raw.strip(): continue
-            clean_s = s_raw.strip().upper().replace("-EQ", "").replace("-BE", "")
-            if clean_s in SYMBOLS_TO_EXCLUDE: continue
-            
-            token_nse, exch_nse = get_token_for_symbol(clean_s, "NSE")
-            if token_nse:
-                symbols_for_processing.append({'base_symbol': clean_s, 'token': token_nse, 'exchange': exch_nse})
-                continue
-            token_bse, exch_bse = get_token_for_symbol(clean_s, "BSE")
-            if token_bse:
-                symbols_for_processing.append({'base_symbol': clean_s, 'token': token_bse, 'exchange': exch_bse})
-
-        print(f"✅ Found tokens for {len(symbols_for_processing)} total symbols.", flush=True)
-    except BaseException as e: # Changed from Exception to BaseException to catch everything
-        print(f"❌ Critical error during symbol pre-loading: {e}", flush=True)
-        # --- NEW DEBUGGING STEP ---
-        import traceback
-        print("--- Full Traceback for Pre-loading Error ---", flush=True)
-        traceback.print_exc(file=sys.stdout)
-        print("------------------------------------------", flush=True)
-        # --- END DEBUGGING STEP ---
-        symbols_for_processing = []
-        symbol_to_row_map = {}
-
-    # 2. Get the list of F&O symbols
-    fno_symbols_set = get_fno_symbols()
-    
-    # 3. Run the main analysis scan
-    run_ath_and_price_scan(fno_symbols_set, symbols_for_processing, symbol_to_row_map)
-        
-    print(f"[{datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S')}] Daily scan has finished.", flush=True)
-
-
-def run_scheduler():
-    """
-    Sets up and runs the job schedule in a loop.
-    This function will run in a separate thread.
-    """
-    # NOTE: Render servers run on UTC time. 3:00 PM IST is 09:30 UTC.
-    schedule.every().day.at("09:30").do(run_daily_scan)
-    print(f"--- [RENDER-DEBUG] Scheduler initialized. Waiting for the scheduled time (09:30 UTC / 15:00 IST). Current UTC time: {datetime.utcnow().strftime('%H:%M:%S')} ---", flush=True)
-
-    while True:
-        schedule.run_pending()
-        # Sleep for a minute before checking the schedule again.
-        time.sleep(60)
-
-# --- NEW RENDER-COMPATIBLE STARTUP LOGIC ---
-def start_background_tasks():
-    """
-    This function runs the initial scan and then starts the scheduler.
-    It's designed to be run in a background thread.
-    """
-    print("\n" + "="*50, flush=True)
-    print("--- [RENDER-DEBUG] Background task thread started ---", flush=True)
-    print("--- [RENDER-DEBUG] Performing initial manual scan on startup... ---", flush=True)
-    print("="*50 + "\n", flush=True)
-    try:
-        run_daily_scan()
-        print("\n" + "="*50, flush=True)
-        print("--- [RENDER-DEBUG] Initial manual scan complete. ---", flush=True)
-        print("--- [RENDER-DEBUG] The service will now start the scheduler for 3 PM runs. ---", flush=True)
-        print("="*50 + "\n", flush=True)
+        print("\n✅ All EOD screeners finished and results saved.")
+        return True
     except Exception as e:
-        print(f"\n❌❌ [RENDER-DEBUG] An error occurred during the initial manual scan: {e}\n", flush=True)
+        print(f"❌ An error occurred during the main EOD screener run: {e}")
+        return False
+
+# ==============================================================================
+# --- 5. NEW: INTRADAY SCREENER ANALYSIS LOGIC ---
+# ==============================================================================
+def _format_result_intraday(symbol, candle_5min):
+    return {
+        "symbol": symbol,
+        "price": Decimal(str(candle_5min[4])), # Close price
+        "volume": int(candle_5min[5]),
+        "changePct": ((Decimal(str(candle_5min[4])) - Decimal(str(candle_5min[1]))) / Decimal(str(candle_5min[1]))) * 100 # Change from open
+    }
+
+def run_intraday_screeners():
+    print("\nStarting INTRADAY screener analysis...")
+    if not intraday_task_lock.acquire(blocking=False):
+        print("An intraday task is already running. Skipping.")
+        return
+
+    try:
+        # --- Authenticate with Angel One ---
+        print("Connecting to Angel One SmartAPI for intraday data...")
+        try:
+            totp = pyotp.TOTP(TOTP_SECRET).now()
+            session_data = smartApi.generateSession(CLIENT_CODE, MPIN, totp)
+            if not session_data['status']:
+                print(f"❌ Angel One Login Failed: {session_data['message']}")
+                return
+            print("✅ Angel One session created successfully.")
+        except Exception as e:
+            print(f"❌ Error during Angel One login: {e}")
+            return
+
+        all_stocks = []
+        if TEST_MODE:
+            print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.")
+            unique_stocks_map = {}
+            scan_kwargs = {}
+            while len(unique_stocks_map) < TEST_STOCK_LIMIT:
+                response = data_table.scan(ProjectionExpression='instrument_token, symbol', **scan_kwargs)
+                items = response.get('Items', [])
+                if not items: break
+                for item in items:
+                    if 'instrument_token' in item and 'symbol' in item:
+                        token = int(item['instrument_token'])
+                        if token not in unique_stocks_map:
+                            unique_stocks_map[token] = item['symbol']
+                            if len(unique_stocks_map) >= TEST_STOCK_LIMIT:
+                                break
+                if 'LastEvaluatedKey' in response and len(unique_stocks_map) < TEST_STOCK_LIMIT:
+                    scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                else:
+                    break
+            all_stocks = [{'token': token, 'symbol': symbol} for token, symbol in unique_stocks_map.items()]
+        else: # Full scan
+            print("Scanning for all unique stock tokens...")
+            scan_kwargs = {'ProjectionExpression': 'instrument_token, symbol'}
+            response = data_table.scan(**scan_kwargs)
+            all_items = response.get('Items', [])
+            while 'LastEvaluatedKey' in response:
+                scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+                response = data_table.scan(**scan_kwargs)
+                all_items.extend(response.get('Items', []))
+            
+            unique_stocks_map = {}
+            for item in all_items:
+                if 'instrument_token' in item and 'symbol' in item:
+                    token = int(item['instrument_token'])
+                    if token not in unique_stocks_map:
+                        unique_stocks_map[token] = item['symbol']
+            all_stocks = [{'token': token, 'symbol': symbol} for token, symbol in unique_stocks_map.items()]
+
+        print(f"Found {len(all_stocks)} unique stocks to analyze for intraday screeners.")
+
+        # --- Initialize results lists ---
+        open_low_results = []
+        open_high_results = []
+        orh_breakout_results = []
+
+        # --- Set time for the first 5-min candle ---
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        from_date = f"{today_str} 09:15"
+        to_date = f"{today_str} 09:20"
+
+        # --- Loop through stocks and perform checks ---
+        for index, stock in enumerate(all_stocks):
+            print(f"  -> [{index + 1}/{len(all_stocks)}] Analyzing {stock['symbol']}...")
+            try:
+                # 1. Fetch the first 5-minute candle of the day
+                hist_params = {"exchange": "NSE", "symboltoken": str(stock['token']), "interval": "FIVE_MINUTE", "fromdate": from_date, "todate": to_date}
+                api_response = smartApi.getCandleData(hist_params)
+                
+                if not (api_response and api_response.get('status') and api_response.get('data')):
+                    time.sleep(0.4)
+                    continue
+                
+                first_candle = api_response['data'][0]
+                candle_open = Decimal(str(first_candle[1]))
+                candle_high = Decimal(str(first_candle[2]))
+                candle_low = Decimal(str(first_candle[3]))
+                candle_close = Decimal(str(first_candle[4]))
+
+                # 2. Check for Open=Low and Open=High
+                if candle_open == candle_low:
+                    open_low_results.append(_format_result_intraday(stock['symbol'], first_candle))
+                if candle_open == candle_high:
+                    open_high_results.append(_format_result_intraday(stock['symbol'], first_candle))
+
+                # 3. Check for ORH Breakout
+                # Get the highs of the previous 3 trading days from our database
+                prev_days_data = data_table.query(
+                    KeyConditionExpression=Key('instrument_token').eq(stock['token']),
+                    ScanIndexForward=False, # Sort by date descending
+                    Limit=3
+                )
+                if prev_days_data.get('Count', 0) == 3:
+                    prev_highs = [item['high'] for item in prev_days_data['Items']]
+                    resistance_level = max(prev_highs)
+                    if candle_close > resistance_level:
+                        orh_breakout_results.append(_format_result_intraday(stock['symbol'], first_candle))
+
+                time.sleep(0.4) # API rate limit
+
+            except Exception as e:
+                print(f"     -> ERROR for {stock['symbol']}: {e}")
+                continue
+        
+        # --- Save results to DynamoDB ---
+        print("Saving intraday screener results...")
+        with results_table.batch_writer() as batch:
+            batch.put_item(Item={'screener_name': 'intraday_open_low', 'results': open_low_results, 'last_updated': datetime.now().isoformat()})
+            batch.put_item(Item={'screener_name': 'intraday_open_high', 'results': open_high_results, 'last_updated': datetime.now().isoformat()})
+            batch.put_item(Item={'screener_name': 'intraday_orh_breakout', 'results': orh_breakout_results, 'last_updated': datetime.now().isoformat()})
+        print("✅ Intraday screeners finished and results saved.")
+
+    finally:
+        intraday_task_lock.release()
+
+# ==============================================================================
+# --- 6. API SERVER LOGIC ---
+# ==============================================================================
+@app.route('/api/screeners/<screener_id>', methods=['GET'])
+def get_screener_results(screener_id):
+    """A single, dynamic endpoint to fetch results for any screener."""
+    if not screener_id:
+        return jsonify({"error": "Screener ID is required"}), 400
     
-    # After the initial scan, start the scheduler for subsequent daily runs
-    run_scheduler()
+    print(f"API request received for screener: {screener_id}")
+    try:
+        response = results_table.get_item(Key={'screener_name': screener_id})
+        item = response.get('Item')
+        if item:
+            return app.response_class(
+                response=json.dumps(item, cls=DecimalEncoder),
+                status=200,
+                mimetype='application/json'
+            )
+        else:
+            return jsonify({'screener_name': screener_id, 'results': [], 'last_updated': datetime.now().isoformat()}), 200
+    except Exception as e:
+        print(f"API Error for {screener_id}: {e}")
+        return jsonify({"error": "An internal server error occurred"}), 500
 
-# This block ensures the background tasks are started only once, 
-# even in environments that might spawn multiple worker processes.
-# This is the correct way to start background jobs with Gunicorn.
-# --- MODIFICATION: Corrected typo from TASS to TASKS ---
-if 'BACKGROUND_TASKS_STARTED' not in os.environ:
-    print("[RENDER-DEBUG] First worker process detected. Starting background tasks.", flush=True)
-    background_thread = threading.Thread(target=start_background_tasks, daemon=True)
-    background_thread.start()
-    os.environ['BACKGROUND_TASKS_STARTED'] = 'true'
-    print("[RENDER-DEBUG] Background thread has been successfully started.", flush=True)
-else:
-    print("[RENDER-DEBUG] Background tasks were already started by another worker. Skipping.", flush=True)
+# ==============================================================================
+# --- 7. SCHEDULING & EXECUTION ---
+# ==============================================================================
+def run_eod_tasks():
+    if not eod_task_lock.acquire(blocking=False):
+        print("An EOD task is already running. Skipping this trigger.")
+        return
+    try:
+        print("="*50)
+        print(f"Starting scheduled EOD tasks at {datetime.now()}")
+        print("="*50)
+        update_success = run_daily_data_update()
+        if update_success:
+            run_all_eod_screeners()
+        else:
+            print("Skipping EOD screener analysis due to data update failure.")
+        print("\nAll scheduled EOD tasks finished.")
+    finally:
+        eod_task_lock.release()
 
-# The `if __name__ == "__main__":` block is for local execution only.
-# Gunicorn does not run this part.
-if __name__ == "__main__":
-    print("[LOCAL-DEBUG] Running locally. Starting Flask app directly.", flush=True)
-    # The background tasks are already started above, so we just run the app.
-    # Note: On Windows, you might see the startup logs twice due to how Flask's reloader works.
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+@app.route('/run-eod-tasks', methods=['POST', 'GET'])
+def trigger_eod_tasks():
+    if eod_task_lock.locked():
+        return jsonify({"status": "EOD tasks are already in progress."}), 429
+    task_thread = threading.Thread(target=run_eod_tasks)
+    task_thread.start()
+    return jsonify({"status": "EOD tasks triggered successfully in the background."}), 202
+
+@app.route('/run-intraday-tasks', methods=['POST', 'GET'])
+def trigger_intraday_tasks():
+    if intraday_task_lock.locked():
+        return jsonify({"status": "Intraday tasks are already in progress."}), 429
+    task_thread = threading.Thread(target=run_intraday_screeners)
+    task_thread.start()
+    return jsonify({"status": "Intraday tasks triggered successfully in the background."}), 202
+
+# The if __name__ == '__main__': block has been removed for deployment.
+# The server will be started by Gunicorn.
