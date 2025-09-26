@@ -12,3 +12,5 @@ schedule
 gunicorn
 logzero
 websocket-client
+boto3
+Flask-Cors
