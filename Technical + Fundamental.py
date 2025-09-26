@@ -710,10 +710,15 @@ def trigger_intraday_tasks():
     task_thread.start()
     return jsonify({"status": "Intraday tasks triggered successfully in the background."}), 202
 
-if __name__ == '__main__':
-    print("Starting the main application...", flush=True)
-    print("Triggering initial EOD data update and screener analysis in the background...", flush=True)
-    initial_eod_thread = threading.Thread(target=run_eod_tasks)
-    initial_eod_thread.start()
-    app.run(host='0.0.0.0', port=5000)
+# ==============================================================================
+# --- 8. APPLICATION STARTUP ---
+# ==============================================================================
+# This code runs once when Gunicorn imports the file to start the server.
+# It triggers the initial data scan in a background thread.
+print("Triggering initial EOD data update and screener analysis in the background...", flush=True)
+initial_eod_thread = threading.Thread(target=run_eod_tasks)
+initial_eod_thread.start()
+
+# The 'if __name__ == "__main__":' block and 'app.run()' have been removed
+# because Gunicorn handles the server startup.
 
