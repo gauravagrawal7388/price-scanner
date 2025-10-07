@@ -59,7 +59,6 @@ smartApi = SmartConnect(API_KEY)
 # Locks to prevent concurrent task runs
 eod_task_lock = threading.Lock()
 intraday_task_lock = threading.Lock()
-# ADDED: A lock to protect the symbol map during read/write operations
 symbol_map_lock = threading.Lock()
 
 # Global map for fast symbol-to-token lookups
@@ -142,8 +141,8 @@ def run_daily_data_update():
         print(f"❌ Error scanning DynamoDB for stocks: {e}")
         return False
 
-    # MODIFIED: Build the symbol map here, safely, after fetching the stock list.
-    print("Building symbol-to-token map from scanned stocks...")
+    # Build/refresh the symbol map here, safely, after fetching the stock list.
+    print("Building/refreshing symbol-to-token map from scanned stocks...")
     global symbol_to_token_map
     temp_map = {stock['symbol']: stock['token'] for stock in stocks_to_update}
     with symbol_map_lock:
@@ -691,13 +690,11 @@ def get_stock_history(symbol):
     print(f"DEBUG: Received request for symbol: '{symbol}'")
     
     token = None
-    # MODIFIED: Safely read from the global map using the lock
     with symbol_map_lock:
         token = symbol_to_token_map.get(symbol)
     
     if not token:
         print(f"DEBUG: Symbol '{symbol}' NOT FOUND in symbol_to_token_map.")
-        # MODIFIED: Safely read from the map to provide debug examples
         with symbol_map_lock:
             if symbol_to_token_map:
                 example_keys = list(symbol_to_token_map.keys())
@@ -806,22 +803,55 @@ def run_task_scheduler():
             print(f"❌ An error occurred in the task scheduler: {e}")
             time.sleep(60)
 
+# MODIFIED: New function to populate the map synchronously before the server starts.
+def populate_symbol_map_on_startup():
+    """Scans the DynamoDB table to create a symbol -> token mapping."""
+    print("--- Running Initial Symbol Map Population ---")
+    global symbol_to_token_map
+    try:
+        all_items = []
+        scan_kwargs = {'ProjectionExpression': 'instrument_token, symbol'}
+        # Use a smaller page size for the initial scan to be quicker
+        scan_kwargs['Limit'] = 500 
+        
+        response = data_table.scan(**scan_kwargs)
+        all_items.extend(response.get('Items', []))
+        
+        # This loop is important for tables with more than 1MB of data
+        while 'LastEvaluatedKey' in response:
+            print(f"  ...scanned {len(all_items)} items, fetching more...")
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+            response = data_table.scan(**scan_kwargs)
+            all_items.extend(response.get('Items', []))
+        
+        temp_map = {item['symbol']: int(item['instrument_token']) for item in all_items if 'symbol' in item and 'instrument_token' in item}
+        
+        with symbol_map_lock:
+            symbol_to_token_map = temp_map
+            
+        print(f"✅✅✅ SYMBOL MAP POPULATED with {len(symbol_to_token_map)} unique symbols. Server is ready.")
+    except Exception as e:
+        print(f"❌❌❌ CRITICAL: Could not populate symbol map on startup. Chart history API will fail. Error: {e}")
+
+
 if __name__ == '__main__':
     print("Starting the main application...")
     
-    # MODIFIED: Removed the separate map population call to prevent the race condition.
-    # The map will now be populated by the initial EOD run.
-
-    # 1. Start the internal scheduler in a background thread
+    # MODIFIED: Run the symbol map population synchronously BEFORE starting the server.
+    # This guarantees the map is ready for the first API request.
+    populate_symbol_map_on_startup()
+    
+    # Start the internal scheduler in a background thread
     scheduler_thread = threading.Thread(target=run_task_scheduler, daemon=True)
     scheduler_thread.start()
     
-    # 2. Trigger an initial EOD run on startup for immediate data availability
+    # Trigger an initial EOD run on startup in the background to refresh data.
+    # The symbol map is already populated, so this is safe.
     print("Triggering initial EOD data update and screener analysis in the background...")
     initial_eod_thread = threading.Thread(target=run_eod_tasks)
     initial_eod_thread.start()
     
-    # 3. Start the Flask server
+    # Start the Flask server
     print("Starting Flask API server to serve screener results...")
     app.run(host='0.0.0.0', port=5000)
 
