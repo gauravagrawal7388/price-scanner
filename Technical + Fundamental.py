@@ -7,6 +7,7 @@ import pyotp
 import sys
 import time
 import json
+import random # ADDED: For debugging symbol map
 from decimal import Decimal
 from datetime import datetime, timedelta, date
 from dateutil.relativedelta import relativedelta
@@ -59,7 +60,7 @@ smartApi = SmartConnect(API_KEY)
 eod_task_lock = threading.Lock()
 intraday_task_lock = threading.Lock()
 
-# NEW: Global map for fast symbol-to-token lookups
+# Global map for fast symbol-to-token lookups
 symbol_to_token_map = {}
 
 class DecimalEncoder(json.JSONEncoder):
@@ -72,7 +73,6 @@ class DecimalEncoder(json.JSONEncoder):
 # --- 3. END-OF-DAY DATA UPDATE LOGIC ---
 # ==============================================================================
 def run_daily_data_update():
-    # ... (This entire function remains unchanged)
     print("\nStarting daily data update process...")
     try:
         print("Connecting to Angel One SmartAPI...")
@@ -211,8 +211,9 @@ def run_daily_data_update():
 # ==============================================================================
 # --- 4. END-OF-DAY SCREENER ANALYSIS LOGIC ---
 # ==============================================================================
-# ... (All screener analysis functions remain unchanged)
-def _format_result_eod(latest, previous): return {"symbol": latest['symbol'], "changePct": ((latest['close'] - previous['close']) / previous['close']) * 100, "price": latest['close'], "volume": int(latest['volume'])}
+def _format_result_eod(latest, previous):
+    return {"symbol": latest['symbol'], "changePct": ((latest['close'] - previous['close']) / previous['close']) * 100, "price": latest['close'], "volume": int(latest['volume'])}
+
 def run_screener_near_ath(all_tokens):
     screener_id = 'near_ath'
     print(f"--- Running Screener: {screener_id} ---")
@@ -229,7 +230,9 @@ def run_screener_near_ath(all_tokens):
             if latest['close'] >= (all_time_high * Decimal('0.75')): final_results.append(_format_result_eod(latest, previous))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_recent_ipos(all_tokens): return 'recent_ipos', []
+
 def run_screener_above_200_sma(all_tokens):
     screener_id = 'above_200_sma'
     print(f"--- Running Screener: {screener_id} ---")
@@ -248,6 +251,7 @@ def run_screener_above_200_sma(all_tokens):
             if pd.notna(latest['sma_200']) and latest['close'] > latest['sma_200']: final_results.append(_format_result_eod(latest, previous))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_multi_year_breakout(all_tokens):
     screener_id = 'multi_year_breakout'
     print(f"--- Running Screener: {screener_id} ---")
@@ -265,6 +269,7 @@ def run_screener_multi_year_breakout(all_tokens):
             if latest['close'] > breakout_level: final_results.append(_format_result_eod(latest, previous))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_monthly_high_breakout(all_tokens):
     screener_id = 'monthly_high_breakout'
     print(f"--- Running Screener: {screener_id} ---")
@@ -289,6 +294,7 @@ def run_screener_monthly_high_breakout(all_tokens):
             if latest['close'] > prev_month_high: final_results.append(_format_result_eod(latest, previous))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_five_pct_breakout(all_tokens):
     screener_id = 'five_pct_breakout'
     print(f"--- Running Screener: {screener_id} ---")
@@ -303,6 +309,7 @@ def run_screener_five_pct_breakout(all_tokens):
             if latest['open'] > (previous['close'] * Decimal('1.05')): final_results.append(_format_result_eod(latest, previous))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_monthly_inside_candle(all_tokens):
     screener_id = 'monthly_inside_candle'
     print(f"--- Running Screener: {screener_id} ---")
@@ -330,6 +337,7 @@ def run_screener_monthly_inside_candle(all_tokens):
                 final_results.append(_format_result_eod(latest, previous))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_tight_weekly_base(all_tokens):
     screener_id = 'tight_weekly_base'
     print(f"--- Running Screener: {screener_id} ---")
@@ -352,6 +360,7 @@ def run_screener_tight_weekly_base(all_tokens):
                 final_results.append(_format_result_eod(latest, previous))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_tight_daily_base(all_tokens):
     screener_id = 'tight_daily_base'
     print(f"--- Running Screener: {screener_id} ---")
@@ -366,6 +375,7 @@ def run_screener_tight_daily_base(all_tokens):
                 final_results.append(_format_result_eod(stock_data[0], stock_data[1]))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_low_of_highest_up_candle(all_tokens):
     screener_id = 'low_of_highest_up_candle'
     print(f"--- Running Screener: {screener_id} ---")
@@ -384,6 +394,7 @@ def run_screener_low_of_highest_up_candle(all_tokens):
                 final_results.append(_format_result_eod(latest, df.sort_values(by='date', ascending=False).iloc[1]))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_low_of_high_volume_candle(all_tokens):
     screener_id = 'low_of_high_volume_candle'
     print(f"--- Running Screener: {screener_id} ---")
@@ -401,6 +412,7 @@ def run_screener_low_of_high_volume_candle(all_tokens):
                 final_results.append(_format_result_eod(latest, df.sort_values(by='date', ascending=False).iloc[1]))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_low_of_3_pct_down_candle(all_tokens):
     screener_id = 'low_of_3_pct_down_candle'
     print(f"--- Running Screener: {screener_id} ---")
@@ -421,6 +433,7 @@ def run_screener_low_of_3_pct_down_candle(all_tokens):
                 final_results.append(_format_result_eod(latest, df.iloc[-2]))
         except Exception: continue
     return screener_id, final_results
+
 def run_screener_above_10_sma(all_tokens):
     screener_id = 'above_10_sma'
     print(f"--- Running Screener: {screener_id} ---")
@@ -440,8 +453,8 @@ def run_screener_above_10_sma(all_tokens):
                 final_results.append(_format_result_eod(latest, previous))
         except Exception: continue
     return screener_id, final_results
+
 def run_all_eod_screeners():
-    # ... (This entire function remains unchanged)
     print("\nStarting all end-of-day screener analyses...")
     try:
         all_tokens = set()
@@ -473,6 +486,7 @@ def run_all_eod_screeners():
             all_tokens = {int(item['instrument_token']) for item in all_items}
 
         print(f"Found {len(all_tokens)} unique stocks to analyze.")
+
         eod_screener_functions = [
             run_screener_near_ath, run_screener_recent_ipos, run_screener_above_200_sma,
             run_screener_multi_year_breakout, run_screener_monthly_high_breakout,
@@ -481,6 +495,7 @@ def run_all_eod_screeners():
             run_screener_low_of_highest_up_candle, run_screener_low_of_high_volume_candle,
             run_screener_low_of_3_pct_down_candle, run_screener_above_10_sma,
         ]
+
         with results_table.batch_writer() as batch:
             for func in eod_screener_functions:
                 screener_id, results = func(all_tokens)
@@ -491,6 +506,7 @@ def run_all_eod_screeners():
                         'results': results,
                         'last_updated': datetime.now().isoformat()
                     })
+        
         print("\n✅ All EOD screeners finished and results saved.")
         return True
     except Exception as e:
@@ -501,15 +517,21 @@ def run_all_eod_screeners():
 # --- 5. INTRADAY SCREENER ANALYSIS LOGIC ---
 # ==============================================================================
 def _format_result_intraday(symbol, candle_5min):
-    # ... (This entire function remains unchanged)
-    return { "symbol": symbol, "price": Decimal(str(candle_5min[4])), "volume": int(candle_5min[5]), "changePct": ((Decimal(str(candle_5min[4])) - Decimal(str(candle_5min[1]))) / Decimal(str(candle_5min[1]))) * 100 }
+    return {
+        "symbol": symbol,
+        "price": Decimal(str(candle_5min[4])), # Close price
+        "volume": int(candle_5min[5]),
+        "changePct": ((Decimal(str(candle_5min[4])) - Decimal(str(candle_5min[1]))) / Decimal(str(candle_5min[1]))) * 100 # Change from open
+    }
+
 def run_intraday_screeners():
-    # ... (This entire function remains unchanged)
     print("\nStarting INTRADAY screener analysis...")
     if not intraday_task_lock.acquire(blocking=False):
         print("An intraday task is already running. Skipping.")
         return
+
     try:
+        # --- Authenticate with Angel One ---
         print("Connecting to Angel One SmartAPI for intraday data...")
         try:
             totp = pyotp.TOTP(TOTP_SECRET).now()
@@ -521,6 +543,7 @@ def run_intraday_screeners():
         except Exception as e:
             print(f"❌ Error during Angel One login: {e}")
             return
+
         all_stocks = []
         if TEST_MODE:
             print(f"⚠️ TEST MODE IS ON. Scanning until {TEST_STOCK_LIMIT} unique stocks are found.")
@@ -542,7 +565,7 @@ def run_intraday_screeners():
                 else:
                     break
             all_stocks = [{'token': token, 'symbol': symbol} for token, symbol in unique_stocks_map.items()]
-        else:
+        else: # Full scan
             print("Scanning for all unique stock tokens...")
             scan_kwargs = {'ProjectionExpression': 'instrument_token, symbol'}
             response = data_table.scan(**scan_kwargs)
@@ -561,42 +584,68 @@ def run_intraday_screeners():
             all_stocks = [{'token': token, 'symbol': symbol} for token, symbol in unique_stocks_map.items()]
 
         print(f"Found {len(all_stocks)} unique stocks to analyze for intraday screeners.")
+
+        # --- Initialize results lists ---
         open_low_results = []
         open_high_results = []
         orh_breakout_results = []
+
+        # --- Set time for the first 5-min candle ---
         today_str = datetime.now().strftime('%Y-%m-%d')
         from_date = f"{today_str} 09:15"
         to_date = f"{today_str} 09:20"
+
+        # --- Loop through stocks and perform checks ---
         for index, stock in enumerate(all_stocks):
             print(f"  -> [{index + 1}/{len(all_stocks)}] Analyzing {stock['symbol']}...")
             try:
+                # 1. Fetch the first 5-minute candle of the day
                 hist_params = {"exchange": "NSE", "symboltoken": str(stock['token']), "interval": "FIVE_MINUTE", "fromdate": from_date, "todate": to_date}
                 api_response = smartApi.getCandleData(hist_params)
+                
                 if not (api_response and api_response.get('status') and api_response.get('data')):
                     time.sleep(0.4)
                     continue
+                
                 first_candle = api_response['data'][0]
                 candle_open = Decimal(str(first_candle[1]))
                 candle_high = Decimal(str(first_candle[2]))
                 candle_low = Decimal(str(first_candle[3]))
                 candle_close = Decimal(str(first_candle[4]))
-                if candle_open == candle_low: open_low_results.append(_format_result_intraday(stock['symbol'], first_candle))
-                if candle_open == candle_high: open_high_results.append(_format_result_intraday(stock['symbol'], first_candle))
-                prev_days_data = data_table.query( KeyConditionExpression=Key('instrument_token').eq(stock['token']), ScanIndexForward=False, Limit=3 )
+
+                # 2. Check for Open=Low and Open=High
+                if candle_open == candle_low:
+                    open_low_results.append(_format_result_intraday(stock['symbol'], first_candle))
+                if candle_open == candle_high:
+                    open_high_results.append(_format_result_intraday(stock['symbol'], first_candle))
+
+                # 3. Check for ORH Breakout
+                # Get the highs of the previous 3 trading days from our database
+                prev_days_data = data_table.query(
+                    KeyConditionExpression=Key('instrument_token').eq(stock['token']),
+                    ScanIndexForward=False, # Sort by date descending
+                    Limit=3
+                )
                 if prev_days_data.get('Count', 0) == 3:
                     prev_highs = [item['high'] for item in prev_days_data['Items']]
                     resistance_level = max(prev_highs)
-                    if candle_close > resistance_level: orh_breakout_results.append(_format_result_intraday(stock['symbol'], first_candle))
-                time.sleep(0.4)
+                    if candle_close > resistance_level:
+                        orh_breakout_results.append(_format_result_intraday(stock['symbol'], first_candle))
+
+                time.sleep(0.4) # API rate limit
+
             except Exception as e:
                 print(f"     -> ERROR for {stock['symbol']}: {e}")
                 continue
+        
+        # --- Save results to DynamoDB ---
         print("Saving intraday screener results...")
         with results_table.batch_writer() as batch:
             batch.put_item(Item={'screener_name': 'intraday_open_low', 'results': open_low_results, 'last_updated': datetime.now().isoformat()})
             batch.put_item(Item={'screener_name': 'intraday_open_high', 'results': open_high_results, 'last_updated': datetime.now().isoformat()})
             batch.put_item(Item={'screener_name': 'intraday_orh_breakout', 'results': orh_breakout_results, 'last_updated': datetime.now().isoformat()})
         print("✅ Intraday screeners finished and results saved.")
+
     finally:
         intraday_task_lock.release()
 
@@ -625,20 +674,29 @@ def get_screener_results(screener_id):
         print(f"API Error for {screener_id}: {e}")
         return jsonify({"error": "An internal server error occurred"}), 500
 
-# NEW: API endpoint for fetching historical data for charts
 @app.route('/api/history/<symbol>', methods=['GET'])
 def get_stock_history(symbol):
     """Fetches up to 1 year of daily data for a given stock symbol for charting."""
-    print(f"History API request received for symbol: {symbol}")
+    # MODIFIED: Added detailed debugging logs
+    print(f"\n--- History API Request ---")
+    print(f"DEBUG: Received request for symbol: '{symbol}'")
     
-    # Use the pre-populated map for a fast lookup
     token = symbol_to_token_map.get(symbol)
+    
     if not token:
-        return jsonify({"error": "Symbol not found in map"}), 404
+        print(f"DEBUG: Symbol '{symbol}' NOT FOUND in symbol_to_token_map.")
+        if symbol_to_token_map:
+            example_keys = list(symbol_to_token_map.keys())
+            sample_size = min(5, len(example_keys))
+            random_samples = random.sample(example_keys, sample_size)
+            print(f"DEBUG: Example keys from map: {random_samples}")
+        else:
+            print("DEBUG: symbol_to_token_map is empty!")
+        return jsonify({"error": f"Symbol '{symbol}' not found in map"}), 404
 
+    print(f"DEBUG: Found token '{token}' for symbol '{symbol}'. Fetching data...")
     try:
         to_date = datetime.now()
-        # Fetch 1 year of data to ensure enough history for the chart
         from_date = to_date - relativedelta(years=1)
         
         hist_params = {
@@ -655,11 +713,10 @@ def get_stock_history(symbol):
             print(f"Could not fetch historical data for {symbol} from SmartAPI.")
             return jsonify({"error": "Could not fetch historical data from provider"}), 500
 
-        # Format the data into the structure required by Lightweight Charts
         chart_data = []
         for candle in api_response['data']:
             chart_data.append({
-                "time": candle[0].split('T')[0],  # Format: 'YYYY-MM-DD'
+                "time": candle[0].split('T')[0],
                 "open": candle[1],
                 "high": candle[2],
                 "low": candle[3],
@@ -676,7 +733,6 @@ def get_stock_history(symbol):
 # --- 7. SCHEDULING & EXECUTION ---
 # ==============================================================================
 def run_eod_tasks():
-    # ... (This entire function remains unchanged)
     if not eod_task_lock.acquire(blocking=False):
         print("An EOD task is already running. Skipping this trigger.")
         return
@@ -692,36 +748,51 @@ def run_eod_tasks():
         print("\nAll scheduled EOD tasks finished.")
     finally:
         eod_task_lock.release()
+
 def get_ist_time():
     """Returns the current time in Indian Standard Time."""
     return datetime.now(ZoneInfo("Asia/Kolkata"))
+
 def run_task_scheduler():
-    # ... (This entire function remains unchanged)
+    """
+    A continuous loop that checks the time and triggers tasks at scheduled intervals.
+    - Intraday screeners run once per weekday at 9:21 AM.
+    - End-of-day tasks run once per weekday at 4:00 PM (16:00).
+    """
     print("✅ Internal Task Scheduler started. Waiting for scheduled times...")
     last_intraday_run_date = None
     last_eod_run_date = None
+
     while True:
         try:
             now_ist = get_ist_time()
             today_ist = now_ist.date()
+
+            # --- Rule 1: Check for Intraday Task ---
+            # Runs at 9:21 AM on weekdays (Monday=0, Sunday=6)
             if now_ist.weekday() < 5 and now_ist.hour == 9 and now_ist.minute == 21:
                 if today_ist != last_intraday_run_date:
                     print(f"\n[SCHEDULER] Triggering INTRADAY tasks for {today_ist.strftime('%Y-%m-%d')}...")
+                    # Run in a separate thread to avoid blocking the scheduler
                     task_thread = threading.Thread(target=run_intraday_screeners)
                     task_thread.start()
                     last_intraday_run_date = today_ist
+
+            # --- Rule 2: Check for End-of-Day (EOD) Task ---
+            # Runs at 4:00 PM (16:00) on weekdays
             if now_ist.weekday() < 5 and now_ist.hour == 16 and now_ist.minute == 0:
                 if today_ist != last_eod_run_date:
                     print(f"\n[SCHEDULER] Triggering END-OF-DAY tasks for {today_ist.strftime('%Y-%m-%d')}...")
                     task_thread = threading.Thread(target=run_eod_tasks)
                     task_thread.start()
                     last_eod_run_date = today_ist
+            
             time.sleep(30)
+
         except Exception as e:
             print(f"❌ An error occurred in the task scheduler: {e}")
             time.sleep(60)
 
-# NEW: Function to populate the symbol map at startup
 def populate_symbol_map():
     """Scans the DynamoDB table to create a symbol -> token mapping."""
     print("Populating symbol-to-token map from DynamoDB...")
@@ -762,3 +833,4 @@ if __name__ == '__main__':
     # 3. Start the Flask server
     print("Starting Flask API server to serve screener results...")
     app.run(host='0.0.0.0', port=5000)
+
