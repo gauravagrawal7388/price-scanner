@@ -7,7 +7,7 @@ import pyotp
 import sys
 import time
 import json
-import random # ADDED: For debugging symbol map
+import random
 from decimal import Decimal
 from datetime import datetime, timedelta, date
 from dateutil.relativedelta import relativedelta
@@ -59,6 +59,8 @@ smartApi = SmartConnect(API_KEY)
 # Locks to prevent concurrent task runs
 eod_task_lock = threading.Lock()
 intraday_task_lock = threading.Lock()
+# ADDED: A lock to protect the symbol map during read/write operations
+symbol_map_lock = threading.Lock()
 
 # Global map for fast symbol-to-token lookups
 symbol_to_token_map = {}
@@ -139,6 +141,14 @@ def run_daily_data_update():
     except Exception as e:
         print(f"❌ Error scanning DynamoDB for stocks: {e}")
         return False
+
+    # MODIFIED: Build the symbol map here, safely, after fetching the stock list.
+    print("Building symbol-to-token map from scanned stocks...")
+    global symbol_to_token_map
+    temp_map = {stock['symbol']: stock['token'] for stock in stocks_to_update}
+    with symbol_map_lock:
+        symbol_to_token_map = temp_map
+    print(f"✅ Symbol map is now populated with {len(symbol_to_token_map)} stocks.")
 
     latest_trading_day = None
     print("Finding the most recent trading day...")
@@ -677,21 +687,25 @@ def get_screener_results(screener_id):
 @app.route('/api/history/<symbol>', methods=['GET'])
 def get_stock_history(symbol):
     """Fetches up to 1 year of daily data for a given stock symbol for charting."""
-    # MODIFIED: Added detailed debugging logs
     print(f"\n--- History API Request ---")
     print(f"DEBUG: Received request for symbol: '{symbol}'")
     
-    token = symbol_to_token_map.get(symbol)
+    token = None
+    # MODIFIED: Safely read from the global map using the lock
+    with symbol_map_lock:
+        token = symbol_to_token_map.get(symbol)
     
     if not token:
         print(f"DEBUG: Symbol '{symbol}' NOT FOUND in symbol_to_token_map.")
-        if symbol_to_token_map:
-            example_keys = list(symbol_to_token_map.keys())
-            sample_size = min(5, len(example_keys))
-            random_samples = random.sample(example_keys, sample_size)
-            print(f"DEBUG: Example keys from map: {random_samples}")
-        else:
-            print("DEBUG: symbol_to_token_map is empty!")
+        # MODIFIED: Safely read from the map to provide debug examples
+        with symbol_map_lock:
+            if symbol_to_token_map:
+                example_keys = list(symbol_to_token_map.keys())
+                sample_size = min(5, len(example_keys))
+                random_samples = random.sample(example_keys, sample_size)
+                print(f"DEBUG: Example keys from map: {random_samples}")
+            else:
+                print("DEBUG: symbol_to_token_map is empty!")
         return jsonify({"error": f"Symbol '{symbol}' not found in map"}), 404
 
     print(f"DEBUG: Found token '{token}' for symbol '{symbol}'. Fetching data...")
@@ -773,7 +787,6 @@ def run_task_scheduler():
             if now_ist.weekday() < 5 and now_ist.hour == 9 and now_ist.minute == 21:
                 if today_ist != last_intraday_run_date:
                     print(f"\n[SCHEDULER] Triggering INTRADAY tasks for {today_ist.strftime('%Y-%m-%d')}...")
-                    # Run in a separate thread to avoid blocking the scheduler
                     task_thread = threading.Thread(target=run_intraday_screeners)
                     task_thread.start()
                     last_intraday_run_date = today_ist
@@ -793,33 +806,11 @@ def run_task_scheduler():
             print(f"❌ An error occurred in the task scheduler: {e}")
             time.sleep(60)
 
-def populate_symbol_map():
-    """Scans the DynamoDB table to create a symbol -> token mapping."""
-    print("Populating symbol-to-token map from DynamoDB...")
-    global symbol_to_token_map
-    try:
-        # Scan the entire table for symbols and tokens
-        all_items = []
-        scan_kwargs = {'ProjectionExpression': 'instrument_token, symbol'}
-        response = data_table.scan(**scan_kwargs)
-        all_items.extend(response.get('Items', []))
-        while 'LastEvaluatedKey' in response:
-            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
-            response = data_table.scan(**scan_kwargs)
-            all_items.extend(response.get('Items', []))
-        
-        # Create a dictionary from the results, ensuring no duplicates
-        temp_map = {item['symbol']: int(item['instrument_token']) for item in all_items if 'symbol' in item and 'instrument_token' in item}
-        symbol_to_token_map = temp_map
-        print(f"✅ Symbol map populated with {len(symbol_to_token_map)} unique symbols.")
-    except Exception as e:
-        print(f"❌ Could not populate symbol map. Chart history API may fail. Error: {e}")
-
 if __name__ == '__main__':
     print("Starting the main application...")
     
-    # 0. Populate the symbol map before starting other tasks
-    populate_symbol_map()
+    # MODIFIED: Removed the separate map population call to prevent the race condition.
+    # The map will now be populated by the initial EOD run.
 
     # 1. Start the internal scheduler in a background thread
     scheduler_thread = threading.Thread(target=run_task_scheduler, daemon=True)
