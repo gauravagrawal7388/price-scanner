@@ -833,25 +833,33 @@ def populate_symbol_map_on_startup():
     except Exception as e:
         print(f"❌❌❌ CRITICAL: Could not populate symbol map on startup. Chart history API will fail. Error: {e}")
 
+# ==============================================================================
+# --- 8. APPLICATION STARTUP LOGIC ---
+# ==============================================================================
 
+# This block now runs when Gunicorn imports the file, ensuring everything is
+# ready before the server starts handling requests.
+print("--- Starting Application Setup ---")
+
+# 1. Populate the symbol map synchronously. This is critical and must complete first.
+populate_symbol_map_on_startup()
+
+# 2. Start the internal scheduler in a background thread.
+print("Starting background task scheduler...")
+scheduler_thread = threading.Thread(target=run_task_scheduler, daemon=True)
+scheduler_thread.start()
+
+# 3. Trigger an initial EOD data refresh in the background.
+print("Triggering initial EOD data update in the background...")
+initial_eod_thread = threading.Thread(target=run_eod_tasks)
+initial_eod_thread.start()
+
+print("--- Application Setup Complete. Server is ready. ---")
+
+# The `if __name__` block is still useful for local development
+# when you run the script directly with `python Screener.py`.
+# Gunicorn will not execute this block, but it's good practice to keep.
 if __name__ == '__main__':
-    print("Starting the main application...")
-    
-    # MODIFIED: Run the symbol map population synchronously BEFORE starting the server.
-    # This guarantees the map is ready for the first API request.
-    populate_symbol_map_on_startup()
-    
-    # Start the internal scheduler in a background thread
-    scheduler_thread = threading.Thread(target=run_task_scheduler, daemon=True)
-    scheduler_thread.start()
-    
-    # Trigger an initial EOD run on startup in the background to refresh data.
-    # The symbol map is already populated, so this is safe.
-    print("Triggering initial EOD data update and screener analysis in the background...")
-    initial_eod_thread = threading.Thread(target=run_eod_tasks)
-    initial_eod_thread.start()
-    
-    # Start the Flask server
-    print("Starting Flask API server to serve screener results...")
+    print("Starting Flask development server...")
     app.run(host='0.0.0.0', port=5000)
 
