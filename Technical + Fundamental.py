@@ -597,12 +597,21 @@ def get_screener_results(screener_id):
 def get_stock_history(symbol):
     print(f"\n--- History API Request ---")
     print(f"DEBUG: Received request for symbol: '{symbol}'")
+    
     token = None
+    # FINAL FIX: Implement a two-step lookup to handle the '-EQ' suffix mismatch.
     with symbol_map_lock:
+        # Step 1: Try to find the exact symbol as requested (e.g., 'BPCL')
         token = symbol_to_token_map.get(symbol)
+        
+        # Step 2: If not found, try adding the '-EQ' suffix and look again (e.g., 'BPCL-EQ')
+        if not token:
+            symbol_with_eq = f"{symbol}-EQ"
+            print(f"DEBUG: Exact symbol not found. Trying with suffix: '{symbol_with_eq}'")
+            token = symbol_to_token_map.get(symbol_with_eq)
     
     if not token:
-        print(f"DEBUG: Symbol '{symbol}' NOT FOUND in symbol_to_token_map.")
+        print(f"DEBUG: Symbol '{symbol}' (with and without -EQ) NOT FOUND in symbol_to_token_map.")
         with symbol_map_lock:
             if symbol_to_token_map:
                 example_keys = list(symbol_to_token_map.keys())
@@ -674,12 +683,10 @@ def run_task_scheduler():
             print(f"❌ An error occurred in the task scheduler: {e}")
             time.sleep(60)
 
-# MODIFIED: Efficiently populate the map on startup from the new smaller table.
 def populate_symbol_map_on_startup():
     print("--- Running Initial Symbol Map Population ---")
     global symbol_to_token_map
     try:
-        # Scan the small, dedicated instrument table. This is fast and efficient.
         response = instrument_table.scan()
         all_items = response.get('Items', [])
         while 'LastEvaluatedKey' in response:
